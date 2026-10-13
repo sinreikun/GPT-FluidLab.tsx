@@ -3,7 +3,7 @@ import { Play, Pause, MousePointer2, Droplets, Eraser, Square, Circle, ScanLine,
 import { Engine, MATERIALS, W, H, DT, STORAGE_KEY, clamp, type LabNode, type Pose } from './engine';
 import { Renderer, type RenderOptions } from './renderer';
 
-type Tool='select'|'fluid'|'erase'|'wallRect'|'wallCircle'|'guideRect'|'guideCircle'|'bodyRect'|'bodyCircle'|'motor'|'pin'|'heat'|'cool';
+type Tool='select'|'fluid'|'erase'|'wallRect'|'wallCircle'|'guideRect'|'guideCircle'|'bodyRect'|'bodyCircle'|'motor'|'pin'|'heat'|'cool'|'thermostat';
 const TOOLS:{id:Tool;name:string;key:string;icon:typeof Play;description:string}[]=[
   {id:'select',name:'選択・移動',key:'V',icon:MousePointer2,description:'オブジェクトをドラッグして移動。空白をドラッグして範囲選択。Shift + クリックで選択を追加・解除。'},
   {id:'fluid',name:'物質',key:'1',icon:Droplets,description:'ドラッグで物質を配置。Ctrl / ⌘ で壁とガイドを上書き。右クリックは消しゴム。'},
@@ -16,6 +16,7 @@ const TOOLS:{id:Tool;name:string;key:string;icon:typeof Play;description:string}
   {id:'bodyCircle',name:'可動壁・円',key:'8',icon:Circle,description:'ドラッグで円形の剛体を配置。中心からの距離が半径。回転しても形状を保ちます。'},
   {id:'motor',name:'モーター',key:'9',icon:Cog,description:'クリックでモーターを配置。プロパティで回転・ピストンを切り替え、駆動を設定。'},
   {id:'pin',name:'ピン',key:'0',icon:MapPin,description:'クリックでピンを配置。重なったモーター・可動壁に付きます。「この位置でつなぐ」で板を接続。'},
+  {id:'thermostat',name:'温度装置',key:'',icon:Thermometer,description:'クリックで温度調整装置を設置。プロパティで目標温度と範囲を設定。再生中に周囲を温めたり冷やしたりします。流体は通過します。'},
   {id:'heat',name:'加熱',key:'',icon:Flame,description:'ドラッグで温めます。停止中も使えます。再生すると熱が伝わり、相変化します。'},
   {id:'cool',name:'冷却',key:'',icon:Snowflake,description:'ドラッグで冷やします。温度表示を使って熱の伝わり方を観察してください。'},
 ];
@@ -100,10 +101,10 @@ export default function FluidLab() {
       else {setSelected(new Set());base.mode='range';}
       gesture.current=base;return;
     }
-    if(t==='motor'||t==='pin') {
+    if(t==='motor'||t==='pin'||t==='thermostat') {
       const existing=t==='motor'?engine.nodes.find(n=>n.kind==='motor'&&Math.floor(engine.poses().get(n.id)!.x)===Math.floor(p.x)&&Math.floor(engine.poses().get(n.id)!.y)===Math.floor(p.y)):undefined;
       if(!existing)engine.checkpoint();const node=existing??engine.add(t,Math.floor(p.x)+.5,Math.floor(p.y)+.5);
-      if(node){setSelected(new Set([node.id]));setTool('select');setHints(false);}else inform('オブジェクトの配置上限に達しました');refresh();return;
+      if(node){setSelected(new Set([node.id]));setTool('select');setHints(false);if(t==='thermostat')setThermal(true);}else inform('オブジェクトの配置上限に達しました');refresh();return;
     }
     if(['fluid','erase','heat','cool'].includes(t)){engine.checkpoint();paint(p.x,p.y,t,e.ctrlKey||e.metaKey);base.changed=true;setHints(false);}
     else {base.mode='shape';base.x=Math.floor(p.x)+.5;base.y=Math.floor(p.y)+.5;base.endX=base.x;base.endY=base.y;}
@@ -167,6 +168,13 @@ export default function FluidLab() {
         <div className="object-heading"><span className={`object-symbol ${node.kind}`}><NodeIcon node={node}/></span><div><strong>{node.name}</strong><span>#{String(node.id).padStart(2,'0')} · {node.joint==='fixed'?'固定関節':'フリー関節'}</span></div></div>
         <label className="text-field">名前<input aria-label="オブジェクト名" value={node.name} maxLength={100} onFocus={beforeEdit} onChange={e=>edit(node,{name:e.target.value})}/></label>
         <div className="coordinate-row"><span>X <b>{nodePose.x.toFixed(1)}</b></span><span>Y <b>{nodePose.y.toFixed(1)}</b></span><span>角度 <b>{(nodePose.a*180/Math.PI%360).toFixed(0)}°</b></span></div>
+        {node.kind==='thermostat'&&<>
+          <ValueControl label="目標温度" value={node.targetTemperature??100} min={-273} max={2000} step={1} unit="°C" onStart={beforeEdit} onChange={v=>edit(node,{targetTemperature:v})}/>
+          <div className="segment"><button aria-label="目標温度を10度下げる" onClick={()=>{beforeEdit();edit(node,{targetTemperature:clamp((node.targetTemperature??100)-10,-273,2000)});}}><Minus size={14}/>10°C</button><button aria-label="目標温度を10度上げる" onClick={()=>{beforeEdit();edit(node,{targetTemperature:clamp((node.targetTemperature??100)+10,-273,2000)});}}><Plus size={14}/>10°C</button></div>
+          <ValueControl label="影響半径" value={node.effectRadius??12} min={1} max={40} step={1} unit="cell" onStart={beforeEdit} onChange={v=>edit(node,{effectRadius:v})}/>
+          <label className="toggle-row"><input type="checkbox" checked={node.enabled??true} onChange={e=>{beforeEdit();edit(node,{enabled:e.target.checked});}}/><span>温度調整装置を有効にする</span></label>
+          <p className="small-note">再生中、円内を目標温度へ徐々に近づけます。流体を遮らず、壁も温めます。停止中は温度を変えません。</p>
+        </>}
         {node.kind==='motor'&&<>
           <div className="segment"><button className={node.mode==='rotation'?'active':''} onClick={()=>{beforeEdit();edit(node,{mode:'rotation'});}}><RotateCcw size={13}/>回転</button><button className={node.mode==='piston'?'active':''} onClick={()=>{beforeEdit();edit(node,{mode:'piston'});}}><ScanLine size={13}/>ピストン</button></div>
           <div className="field-label">駆動方向</div><div className="segment direction">{[{v:1,t:'正転'},{v:0,t:'停止'},{v:-1,t:'逆転'}].map(d=><button key={d.v} className={node.direction===d.v?'active':''} onClick={()=>{beforeEdit();edit(node,{direction:d.v});}}>{d.t}</button>)}</div>
@@ -195,4 +203,4 @@ export default function FluidLab() {
     {help&&<div className="modal-backdrop" onClick={()=>setHelp(false)}><section className="help-modal" aria-modal="true" role="dialog" aria-label="操作ガイド" onClick={e=>e.stopPropagation()}><button className="modal-close icon-button" aria-label="ガイドを閉じる" onClick={()=>setHelp(false)}><X size={19}/></button><FlaskConical size={30}/><h2>小さなセルから、実験を。</h2><p>物質を置いて、機械で動かして、その変化を観察する。</p><ol><li><strong>物質を置く</strong><span>物質を選び、盤面をドラッグ。水・油・水銀の密度差を試してみましょう。</span></li><li><strong>機械を組む</strong><span>モーターと可動壁を置き、接続点にピンを配置。「この位置でつなぐ」で板を接続します。</span></li><li><strong>動かして観察</strong><span>Space で再生・停止。停止中も移動・設定ができます。加熱・冷却と温度表示で相変化を観察。</span></li></ol><div className="shortcut-list"><span><kbd>V</kbd>選択・移動</span><span><kbd>1–0</kbd>ツール切替</span><span><kbd>Space</kbd>再生 / 停止</span><span><kbd>[ ]</kbd>ブラシ半径</span><span><kbd>Ctrl / ⌘ Z</kbd>Undo</span><span><kbd>Delete</kbd>選択を削除</span></div><p className="small-note">ウィンドウはタイトルバーをドラッグして移動、− で折りたたみ。保存はこのブラウザ内のみ。科学計算用の CFD ではなく、挙動を楽しむセルモデルです。</p><button className="full-button accent" onClick={()=>setHelp(false)}>実験をはじめる <Play size={14}/></button></section></div>}
   </main>;
 }
-function NodeIcon({node}:{node:LabNode}) {const Icon=node.kind==='motor'?Cog:node.kind==='pin'?MapPin:node.kind==='rect'?Square:Circle;return <Icon size={13} className={`node-icon ${node.kind}`}/>;}
+function NodeIcon({node}:{node:LabNode}) {const Icon=node.kind==='motor'?Cog:node.kind==='thermostat'?Thermometer:node.kind==='pin'?MapPin:node.kind==='rect'?Square:Circle;return <Icon size={13} className={`node-icon ${node.kind}`}/>;}

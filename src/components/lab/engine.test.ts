@@ -112,3 +112,29 @@ describe('save validation and demo',()=>{
     expect(e.cells.length).toBe(W*H);
   });
 });
+
+describe('placed temperature controllers',()=>{
+  it('heats and freezes nearby water, respects radius, and does not block fluid',()=>{
+    const e=new Engine();e.conductivity.fill(0);e.viscosity.fill(100);
+    const n=e.add('thermostat',100.5,100.5)!;n.targetTemperature=150;n.effectRadius=5;
+    const center=e.index(100,100),outside=e.index(106,100);e.cells[center]=1;
+    expect(e.occupancy[center]).toBe(0);
+    for(let i=0;i<60;i++)e.step();expect(e.temperature[center]).toBeGreaterThan(100);expect(e.cells[center]).toBe(7);expect(e.temperature[outside]).toBe(20);
+    n.targetTemperature=-50;for(let i=0;i<100;i++)e.step();expect(e.temperature[center]).toBeLessThan(0);expect(e.cells[center]).toBe(4);
+  });
+  it('supports disabling and moving the active area',()=>{
+    const e=new Engine();e.conductivity.fill(0);const n=e.add('thermostat',100.5,100.5)!;n.enabled=false;e.step();expect(e.temperature[e.index(100,100)]).toBe(20);
+    n.enabled=true;e.move(new Set([n.id]),40,0,e.poses());e.step();expect(e.temperature[e.index(100,100)]).toBe(20);expect(e.temperature[e.index(140,100)]).toBeGreaterThan(20);
+  });
+  it('combines overlapping heating and cooling without order dependence or overshoot',()=>{
+    const make=(reverse:boolean)=>{const e=new Engine();e.conductivity.fill(0);for(const t of reverse?[-80,120]:[120,-80]){const n=e.add('thermostat',100.5,100.5)!;n.targetTemperature=t;}for(let i=0;i<10;i++)e.step();return e;};
+    const a=make(false),b=make(true);expect(Array.from(a.temperature)).toEqual(Array.from(b.temperature));expect(a.temperature[a.index(100,100)]).toBeCloseTo(20);
+  });
+  it('persists device settings, undoes edits and rejects malformed device data',()=>{
+    const e=new Engine(),n=e.add('thermostat',50.5,60.5)!;n.targetTemperature=-120;n.effectRadius=23;n.enabled=false;
+    const saved=e.snapshot(),loaded=new Engine();expect(loaded.load(JSON.stringify(saved))).toBe(true);expect(loaded.nodes[0]).toEqual(n);
+    loaded.checkpoint();loaded.nodes[0].targetTemperature=200;loaded.undo();expect(loaded.nodes[0].targetTemperature).toBe(-120);
+    for(const patch of [{targetTemperature:-274},{targetTemperature:2001},{effectRadius:0},{enabled:'yes'}]){const bad=structuredClone(saved);Object.assign(bad.nodes[0],patch);expect(loaded.load(JSON.stringify(bad))).toBe(false);}
+    loaded.checkpoint();loaded.delete(new Set([n.id]));expect(loaded.nodes).toHaveLength(0);loaded.undo();expect(loaded.nodes[0].effectRadius).toBe(23);
+  });
+});

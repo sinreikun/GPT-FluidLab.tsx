@@ -47,6 +47,15 @@ export class Renderer {
     for(const n of engine.nodes.filter(n=>n.kind==='pin')) {
       const p=poses.get(n.id)!;ctx.fillStyle=n.joint==='free'?'#beabef':'#6fe4c0';ctx.strokeStyle=opts.selected.has(n.id)?'#fff':'#153a35';ctx.lineWidth=.6;ctx.beginPath();ctx.arc(p.x,p.y,1.5,0,Math.PI*2);ctx.fill();ctx.stroke();
     }
+    for(const n of engine.nodes.filter(n=>n.kind==='thermostat')){
+      const p=poses.get(n.id)!,target=n.targetTemperature??100,selected=opts.selected.has(n.id);
+      const color=!n.enabled?'#7c8994':target>=20?'#f1a572':'#83c5fa';
+      ctx.save();ctx.strokeStyle=color;ctx.lineWidth=selected?.7:.4;
+      if(selected){ctx.fillStyle=target>=20?'#f1a57212':'#83c5fa12';ctx.setLineDash([1.5,1.5]);ctx.beginPath();ctx.arc(p.x,p.y,n.effectRadius??12,0,Math.PI*2);ctx.fill();ctx.stroke();ctx.setLineDash([]);}
+      ctx.fillStyle='#182630';ctx.fillRect(p.x-2.5,p.y-2.5,5,5);ctx.strokeRect(p.x-2.5,p.y-2.5,5,5);
+      ctx.beginPath();ctx.moveTo(p.x-1.3,p.y);ctx.lineTo(p.x+1.3,p.y);if(target>=20){ctx.moveTo(p.x,p.y-1.3);ctx.lineTo(p.x,p.y+1.3);}ctx.stroke();
+      ctx.font='2.3px system-ui';ctx.fillStyle=color;ctx.fillText(n.enabled?`${target>=0?'+':''}${target}°C`:'OFF',p.x+4,p.y+1);ctx.restore();
+    }
     if(opts.hints) {
       const label=(x:number,y:number,num:string,title:string,sub:string)=>{ctx.font='2.6px system-ui';ctx.fillStyle='#6fe4c0';ctx.fillText(num,x,y);ctx.fillStyle='#aabecb';ctx.fillText(title,x+7,y);ctx.font='2px system-ui';ctx.fillStyle='#567282';ctx.fillText(sub,x+7,y+4);};
       label(79,84,'01','密度と攪拌','油は浮き、水銀は沈む');label(188,125,'02','熱と相変化','水と溶岩の境界を観察');label(191,42,'03','気体の上昇','水素は上へ');

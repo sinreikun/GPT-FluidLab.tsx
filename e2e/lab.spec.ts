@@ -52,3 +52,25 @@ test('window movement, collapsed mobile panels and runtime without errors',async
   await page.setViewportSize({width:390,height:844});await page.reload();await expect(page.getByRole('button',{name:'プロパティを展開'})).toBeVisible();await expect(page.getByRole('button',{name:'オブジェクトを展開'})).toBeVisible();await expect(page.getByRole('button',{name:'水',exact:true})).toBeHidden();await page.getByRole('button',{name:'ツールを展開'}).click();await expect(page.getByRole('button',{name:'水',exact:true})).toBeVisible();await page.getByRole('button',{name:'ツールを折りたたむ'}).click();
   await page.screenshot({path:'test-results/mobile.png',fullPage:true});
 });
+
+test('places an adjustable temperature controller, heats/cools, saves and undoes',async({page})=>{
+  await page.goto('/');await page.getByRole('button',{name:'停止 Space',exact:true}).click();
+  await page.getByRole('button',{name:'盤面を全消去'}).click();
+  await page.getByRole('button',{name:'温度装置',exact:true}).click();await clickCell(page,200,100);
+  await expect(page.getByLabel('目標温度',{exact:true})).toHaveValue('100');
+  await page.getByLabel('目標温度',{exact:true}).fill('-50');await page.getByLabel('目標温度',{exact:true}).blur();
+  await page.getByRole('button',{name:'目標温度を10度上げる',exact:true}).click();await expect(page.getByLabel('目標温度',{exact:true})).toHaveValue('-40');
+  await page.getByRole('button',{name:'目標温度を10度下げる',exact:true}).click();await expect(page.getByLabel('目標温度',{exact:true})).toHaveValue('-50');
+  await page.getByLabel('影響半径',{exact:true}).fill('8');await page.getByLabel('影響半径',{exact:true}).blur();
+  let s=await saveState(page);expect(s.nodes[0].kind).toBe('thermostat');expect(s.nodes[0].targetTemperature).toBe(-50);expect(s.temperature[100*400+200]).toBe(20);
+  await page.getByRole('button',{name:'再生 Space',exact:true}).click();
+  await expect.poll(async()=>{const state=await saveState(page);return state.temperature[100*400+200];}).toBeLessThan(0);
+  await page.getByRole('button',{name:'停止 Space',exact:true}).click();
+  await page.getByLabel('目標温度',{exact:true}).fill('200');await page.getByLabel('目標温度',{exact:true}).blur();
+  await page.getByRole('button',{name:'再生 Space',exact:true}).click();
+  await expect.poll(async()=>{const state=await saveState(page);return state.temperature[100*400+200];}).toBeGreaterThan(100);
+  await page.getByRole('button',{name:'停止 Space',exact:true}).click();await page.reload();
+  await page.getByRole('button',{name:'停止 Space',exact:true}).click();await page.getByRole('button',{name:'温度調整装置',exact:true}).click();
+  await expect(page.getByLabel('目標温度',{exact:true})).toHaveValue('200');await expect(page.getByLabel('影響半径',{exact:true})).toHaveValue('8');
+  await page.keyboard.press('Delete');s=await saveState(page);expect(s.nodes).toHaveLength(0);await page.keyboard.press('Control+z');s=await saveState(page);expect(s.nodes[0].kind).toBe('thermostat');
+});

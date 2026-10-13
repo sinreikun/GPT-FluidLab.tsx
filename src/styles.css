@@ -5,3 +5,4 @@
 @media(prefers-reduced-motion:reduce){button{transition:none}}
 .properties-panel .panel-content{max-height:min(336px,calc(100dvh - 167px))}
 @media(max-width:600px){.panel.collapsed{width:155px}.properties-panel .panel-content{max-height:calc(100dvh - 167px)}}
+.node-icon.thermostat{color:#eca878}.object-symbol.thermostat{border-color:#6e5644;background:#34291f}

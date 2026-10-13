@@ -16,12 +16,13 @@ export const MATERIALS: Material[] = [
   {name:'水素',en:'HYDROGEN',density:-6,viscosity:0,conductivity:.2,capacity:1.4,temperature:20,color:[160,139,224]},
   {name:'水銀蒸気',en:'HG VAPOR',density:-1,viscosity:4,conductivity:.25,capacity:.7,temperature:370,color:[156,179,163]},
 ];
-export type NodeKind = 'motor' | 'pin' | 'rect' | 'circle';
+export type NodeKind = 'motor' | 'pin' | 'rect' | 'circle' | 'thermostat';
 export interface LabNode {
   id: number; kind: NodeKind; name: string; parent: number | null; joint: 'fixed' | 'free';
   lx: number; ly: number; la: number; width: number; height: number; radius: number;
   mode: 'rotation' | 'piston'; direction: number; speed: number; amp: number; strokeAngle: number;
   t: number; bounce: number; repeat: boolean; blocked: boolean;
+  targetTemperature?: number; effectRadius?: number; enabled?: boolean;
 }
 export interface Pose { x: number; y: number; a: number; ax: number; ay: number }
 export interface Trapped { x: number; y: number; material: number; temperature: number; dx?: number; dy?: number }
@@ -29,7 +30,7 @@ export interface Snapshot {
   version: 4; width: number; height: number; cells: number[]; temperature: number[]; terrain: number[];
   nodes: LabNode[]; nextId: number; viscosity: number[]; conductivity: number[]; trapped: Trapped[];
 }
-export const NODE_NAMES: Record<NodeKind,string> = {motor:'モーター',pin:'ピン',rect:'可動壁 · 矩形',circle:'可動壁 · 円'};
+export const NODE_NAMES: Record<NodeKind,string> = {motor:'モーター',pin:'ピン',rect:'可動壁 · 矩形',circle:'可動壁 · 円',thermostat:'温度調整装置'};
 const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
 export class Engine {
   cells = new Uint8Array(SIZE);
@@ -48,6 +49,8 @@ export class Engine {
   private moved = new Uint32Array(SIZE);
   private flowTick = 0;
   private heat = new Float32Array(SIZE);
+  private targets = new Float32Array(SIZE);
+  private weights = new Float32Array(SIZE);
   private seen = new Uint32Array(SIZE);
   private queue = new Int32Array(SIZE);
   private failedSpace = new Uint8Array(SIZE);
@@ -70,7 +73,8 @@ export class Engine {
       if(!Array.isArray(s.nodes)||s.nodes.length>1000 || !finite(s.nextId)) return false;
       const ids=new Set<number>();
       for(const n of s.nodes) {
-        if(!Number.isSafeInteger(n.id)||n.id<1||ids.has(n.id)||!['motor','pin','rect','circle'].includes(n.kind)||!['fixed','free'].includes(n.joint)||typeof n.name!=='string'||n.name.length>100) return false;
+        if(!Number.isSafeInteger(n.id)||n.id<1||ids.has(n.id)||!['motor','pin','rect','circle','thermostat'].includes(n.kind)||!['fixed','free'].includes(n.joint)||typeof n.name!=='string'||n.name.length>100) return false;
+        if(n.kind==='thermostat'&&(!finite(n.targetTemperature)||n.targetTemperature< -273||n.targetTemperature>2000||!finite(n.effectRadius)||n.effectRadius<1||n.effectRadius>40||typeof n.enabled!=='boolean'))return false;
         ids.add(n.id);
         for(const k of ['lx','ly','la','width','height','radius','speed','amp','strokeAngle','t','direction','bounce']) if(!finite(n[k])) return false;
         if(Math.abs(n.lx)>2000||Math.abs(n.ly)>2000||n.width<1||n.width>W||n.height<1||n.height>H||n.radius<.5||n.radius>300||n.speed<0||n.speed>10||n.amp<0||n.amp>240||n.t<0||n.t>1||![-1,0,1].includes(n.direction)||![-1,1].includes(n.bounce)||!['rotation','piston'].includes(n.mode)||typeof n.repeat!=='boolean') return false;
@@ -158,6 +162,7 @@ export class Engine {
     if(kind==='motor') { const existing=this.nodes.find(n=>n.kind==='motor'&&Math.floor(poses.get(n.id)!.x)===Math.floor(x)&&Math.floor(poses.get(n.id)!.y)===Math.floor(y)); if(existing)return existing; }
     if(this.nodes.length>=1000)return null;
     const n:LabNode={id:this.nextId++,kind,name:NODE_NAMES[kind],parent:null,joint:'fixed',lx:x,ly:y,la:0,width,height,radius,mode:'rotation',direction:1,speed:1,amp:40,strokeAngle:Math.PI,t:0,bounce:1,repeat:true,blocked:false};
+    if(kind==='thermostat'){n.targetTemperature=100;n.effectRadius=12;n.enabled=true;}
     if(kind==='pin') {
       const parent=this.nodes.find(p=>p.kind==='motor'&&Math.floor(poses.get(p.id)!.x)===Math.floor(x)&&Math.floor(poses.get(p.id)!.y)===Math.floor(y))??[...this.nodes].reverse().find(p=>(p.kind==='rect'||p.kind==='circle')&&this.contains(p,poses.get(p.id)!,x,y));
       if(parent) {n.parent=parent.id; this.setWorld(n,x,y,0,poses);}
@@ -168,10 +173,10 @@ export class Engine {
     const dx=x-p.x,dy=y-p.y,c=Math.cos(p.a),s=Math.sin(p.a),lx=c*dx+s*dy,ly=-s*dx+c*dy;
     return n.kind==='rect'?Math.abs(lx)<=n.width/2&&Math.abs(ly)<=n.height/2:n.kind==='circle'?dx*dx+dy*dy<=n.radius*n.radius:Math.hypot(dx,dy)<3;
   }
-  hit(x:number,y:number):LabNode|undefined { const poses=this.poses(); return [...this.nodes].reverse().filter(n=>n.kind==='pin'||n.kind==='motor').find(n=>this.contains(n,poses.get(n.id)!,x,y))??[...this.nodes].reverse().find(n=>this.contains(n,poses.get(n.id)!,x,y)); }
+  hit(x:number,y:number):LabNode|undefined { const poses=this.poses(); return [...this.nodes].reverse().filter(n=>n.kind==='pin'||n.kind==='motor'||n.kind==='thermostat').find(n=>this.contains(n,poses.get(n.id)!,x,y))??[...this.nodes].reverse().find(n=>this.contains(n,poses.get(n.id)!,x,y)); }
   shapeCells(n:LabNode,p:Pose,fn:(i:number,x:number,y:number)=>void) {
     if(n.kind==='motor') {const i=this.index(p.x,p.y);if(i>=0)fn(i,Math.floor(p.x),Math.floor(p.y));return;}
-    if(n.kind==='pin')return;
+    if(n.kind==='pin'||n.kind==='thermostat')return;
     const c=Math.abs(Math.cos(p.a)),s=Math.abs(Math.sin(p.a));
     const rx=n.kind==='circle'?n.radius:(c*n.width+s*n.height)/2,ry=n.kind==='circle'?n.radius:(s*n.width+c*n.height)/2;
     for(let y=Math.max(0,Math.floor(p.y-ry));y<=Math.min(H-1,Math.ceil(p.y+ry));y++)for(let x=Math.max(0,Math.floor(p.x-rx));x<=Math.min(W-1,Math.ceil(p.x+rx));x++) if(this.contains(n,p,x+.5,y+.5))fn(y*W+x,x,y);
@@ -227,7 +232,7 @@ export class Engine {
       if(erase) {this.cells[i]=0;this.terrain[i]=0;this.temperature[i]=20;}
       else if(!this.occupancy[i]&&(overwrite||this.terrain[i]===0)) {if(overwrite)this.terrain[i]=0;this.cells[i]=material;this.temperature[i]=MATERIALS[material].temperature;}
     }
-    if(erase){const poses=this.poses();this.delete(new Set(this.nodes.filter(n=>(n.kind==='motor'||n.kind==='pin')&&Math.hypot(poses.get(n.id)!.x-x,poses.get(n.id)!.y-y)<=r).map(n=>n.id)));}
+    if(erase){const poses=this.poses();this.delete(new Set(this.nodes.filter(n=>(n.kind==='motor'||n.kind==='pin'||n.kind==='thermostat')&&Math.hypot(poses.get(n.id)!.x-x,poses.get(n.id)!.y-y)<=r).map(n=>n.id)));}
   }
   terrainShape(x0:number,y0:number,x1:number,y1:number,type:1|2,circle=false) {
     const radius=Math.hypot(x1-x0,y1-y0);
@@ -273,6 +278,24 @@ export class Engine {
       }
     }
   }
+  private applyThermostats() {
+    const devices=this.nodes.filter(n=>n.kind==='thermostat'&&n.enabled);
+    if(!devices.length)return;
+    this.targets.fill(0);this.weights.fill(0);const poses=this.poses();
+    for(const n of devices){
+      const p=poses.get(n.id)!,radius=clamp(n.effectRadius??12,1,40),target=clamp(n.targetTemperature??100,-273,2000);
+      for(let y=Math.max(0,Math.floor(p.y-radius));y<=Math.min(H-1,Math.ceil(p.y+radius));y++)for(let x=Math.max(0,Math.floor(p.x-radius));x<=Math.min(W-1,Math.ceil(p.x+radius));x++){
+        const distance=Math.hypot(x+.5-p.x,y+.5-p.y);if(distance>radius)continue;
+        const i=y*W+x,weight=1-distance/(radius+1);
+        this.targets[i]+=target*weight;this.weights[i]+=weight;
+      }
+    }
+    // Combine overlapping devices before applying heat, so order cannot change the result.
+    for(let i=0;i<SIZE;i++)if(this.weights[i]){
+      const target=this.targets[i]/this.weights[i];
+      this.temperature[i]+=(target-this.temperature[i])*(1-Math.exp(-.06*this.weights[i]));
+    }
+  }
   private thermal() {
     this.heat.fill(0);
     for(let y=0;y<H;y++)for(let x=0;x<W;x++) {
@@ -292,6 +315,9 @@ export class Engine {
     for(let i=0;i<SIZE;i++) {
       this.temperature[i]+=this.heat[i];
       if(!this.cells[i]&&!this.terrain[i])this.temperature[i]+=(20-this.temperature[i])*.003;
+    }
+    this.applyThermostats();
+    for(let i=0;i<SIZE;i++){
       const m=this.cells[i],t=this.temperature[i];
       const change=m===1?(t<=0?4:t>=100?7:1):m===4&&t>=1?1:m===7&&t<=95?1:m===2&&t>=300?8:m===3&&t>=357?10:m===10&&t<=340?3:m===5&&t<=700?6:m===6&&t>=900?5:m;
       this.cells[i]=change;

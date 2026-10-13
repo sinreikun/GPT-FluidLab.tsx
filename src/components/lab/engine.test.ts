@@ -50,9 +50,16 @@ describe('mechanisms and editing',()=>{
     expect(m.blocked).toBe(true);expect(m.t).toBe(0);expect(m.bounce).toBe(1);expect(e.poses().get(m.id)!.x).toBe(50);expect(e.poses().get(b.id)!.x).toBe(50);
     m.amp=60;m.strokeAngle=Math.PI/2;e.rasterize();expect(e.poses().get(m.id)!.x).toBe(50);expect(e.poses().get(m.id)!.y).toBe(100);
   });
-  it('rolls rotation back on fixed wall collision',()=>{
+  it('rolls rotation back on guide collision',()=>{
     const e=new Engine(),m=e.add('motor',80,80)!,b=e.add('rect',90,80,16,2)!;e.reparent(b.id,m.id);m.speed=10;
-    e.terrainShape(90,82,100,83,1);e.step();expect(m.blocked).toBe(true);expect(m.la).toBe(0);
+    e.terrainShape(90,82,100,83,2);e.step();expect(m.blocked).toBe(true);expect(m.la).toBe(0);
+  });
+  it.each(['rect','circle'] as const)('rotation, piston and manual movement of %s pass through fixed walls',kind=>{
+    const e=new Engine(),m=e.add('motor',80,80)!,b=e.add(kind,90,80,16,2,4)!;e.reparent(b.id,m.id);m.speed=10;
+    e.terrainShape(60,60,130,120,1);e.step();expect(m.blocked).toBe(false);expect(m.la).toBeGreaterThan(0);
+    m.mode='piston';m.strokeAngle=0;m.amp=60;m.t=0;e.step();expect(m.blocked).toBe(false);expect(m.t).toBeGreaterThan(0);
+    const before=e.poses(),x=before.get(b.id)!.x;expect(e.move(new Set([b.id]),10,0,before)).toBe(true);expect(e.poses().get(b.id)!.x).toBeCloseTo(x+10);
+    expect(e.terrain[e.index(90,80)]).toBe(1);
   });
   it('fast pistons sweep and push intermediate particles instead of passing through them',()=>{
     const e=new Engine();e.terrainShape(0,90,W-1,90,1);e.terrainShape(0,109,W-1,109,1);fill(e,53,93,64,107,1);e.viscosity[1]=100;e.conductivity.fill(0);
@@ -65,8 +72,8 @@ describe('mechanisms and editing',()=>{
     const e=new Engine(),m=e.add('motor',50,50)!;m.mode='piston';m.repeat=false;m.t=.99;m.speed=10;m.direction=1;m.bounce=-1;e.step();
     expect(m.t).toBe(1);expect(m.direction).toBe(0);m.direction=-1;e.step();expect(m.t).toBeLessThan(1);
   });
-  it('manual dragging cannot jump through a thin fixed wall',()=>{
-    const e=new Engine(),b=e.add('rect',50,100,3,10)!;e.terrainShape(60,80,60,120,1);const before=e.poses();
+  it('manual dragging cannot jump through a thin guide',()=>{
+    const e=new Engine(),b=e.add('rect',50,100,3,10)!;e.terrainShape(60,80,60,120,2);const before=e.poses();
     expect(e.move(new Set([b.id]),20,0,before)).toBe(false);expect(e.poses().get(b.id)!.x).toBe(50);
     e.terrain.fill(0);expect(e.move(new Set([b.id]),20,0,before)).toBe(true);expect(e.poses().get(b.id)!.x).toBe(70);
   });

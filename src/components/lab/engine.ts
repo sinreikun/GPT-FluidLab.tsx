@@ -147,7 +147,7 @@ export class Engine {
     for(let step=1;step<=steps;step++){
       for(const n of roots){const a=before.get(n.id)!,b=original.get(n.id)!,f=step/steps;this.setWorld(n,a.x+(b.x+dx-a.x)*f,a.y+(b.y+dy-a.y)*f,b.a,before);}
       const poses=this.poses();let collision=false;
-      for(const n of moving.filter(n=>n.kind==='rect'||n.kind==='circle'))this.shapeCells(n,poses.get(n.id)!,(i)=>{if(this.terrain[i]===1)collision=true;});
+      for(const n of moving.filter(n=>n.kind==='rect'||n.kind==='circle'))this.shapeCells(n,poses.get(n.id)!,(i)=>{if(this.terrain[i]===2)collision=true;});
       if(collision){for(const {n,lx,ly,la} of locals)Object.assign(n,{lx,ly,la});this.rasterize();this.revision++;return false;}
     }
     this.rasterize(before);this.revision++;return true;
@@ -260,7 +260,7 @@ export class Engine {
           const p=next.get(child.id)!;
           const c=Math.abs(Math.cos(p.a)),s=Math.abs(Math.sin(p.a));const rx=child.kind==='circle'?child.radius:(c*child.width+s*child.height)/2,ry=child.kind==='circle'?child.radius:(s*child.width+c*child.height)/2;
           if(p.x-rx<0||p.x+rx>W||p.y-ry<0||p.y+ry>H)collision=true;
-          this.shapeCells(child,p,(i)=>{if(this.terrain[i])collision=true;});
+          this.shapeCells(child,p,(i)=>{if(this.terrain[i]===2)collision=true;});
           if(collision)break;
         }
         if(collision)break;

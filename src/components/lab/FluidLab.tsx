@@ -8,7 +8,7 @@ const TOOLS:{id:Tool;name:string;key:string;icon:typeof Play;description:string}
   {id:'select',name:'選択・移動',key:'V',icon:MousePointer2,description:'オブジェクトをドラッグして移動。空白をドラッグして範囲選択。Shift + クリックで選択を追加・解除。'},
   {id:'fluid',name:'物質',key:'1',icon:Droplets,description:'ドラッグで物質を配置。Ctrl / ⌘ で壁とガイドを上書き。右クリックは消しゴム。'},
   {id:'erase',name:'消しゴム',key:'2',icon:Eraser,description:'ドラッグで物質・壁・ガイドを消去。モーターとピンも消去できます。可動壁は選択して Delete。'},
-  {id:'wallRect',name:'壁・矩形',key:'3',icon:Square,description:'ドラッグで固定壁を配置。Shift で正方形。流体と機械を通しません。'},
+  {id:'wallRect',name:'壁・矩形',key:'3',icon:Square,description:'ドラッグで固定壁を配置。Shift で正方形。流体を遮断します。可動壁は通過します。'},
   {id:'wallCircle',name:'壁・円',key:'4',icon:Circle,description:'押した位置が中心、ドラッグの長さが半径。固定壁は流体を遮断します。'},
   {id:'guideRect',name:'ガイド・矩形',key:'5',icon:ScanLine,description:'ドラッグでガイドを配置。流体は通過し、可動壁の駆動は接触時に取り消されます。'},
   {id:'guideCircle',name:'ガイド・円',key:'6',icon:CircleDot,description:'押した位置を中心に円形ガイドを配置。流体を通し、機械を止めます。'},
@@ -116,7 +116,7 @@ export default function FluidLab() {
     if(g.mode==='shape'&&e.shiftKey&&!g.tool.endsWith('Circle')){const sx=x>=g.x?1:-1,sy=y>=g.y?1:-1;const side=Math.min(Math.max(Math.abs(x-g.x),Math.abs(y-g.y)),sx>0?W-.5-g.x:g.x-.5,sy>0?H-.5-g.y:g.y-.5);x=g.x+sx*side;y=g.y+sy*side;}
     g.endX=x;g.endY=y;
     if(g.mode==='paint'){const distance=Math.hypot(x-g.lastX,y-g.lastY),steps=Math.max(1,Math.ceil(distance/Math.max(1,radius/2)));for(let s=1;s<=steps;s++)paint(g.lastX+(x-g.lastX)*s/steps,g.lastY+(y-g.lastY)*s/steps,g.tool,e.ctrlKey||e.metaKey);}
-    if(g.mode==='move'&&Math.hypot(x-g.x,y-g.y)>.3){if(!g.changed){engine.checkpoint();g.changed=true;}if(!engine.move(g.ids!,x-g.x,y-g.y,g.poses!))inform('固定壁に接触しています');setHints(false);}
+    if(g.mode==='move'&&Math.hypot(x-g.x,y-g.y)>.3){if(!g.changed){engine.checkpoint();g.changed=true;}if(!engine.move(g.ids!,x-g.x,y-g.y,g.poses!))inform('ガイドに接触しています');setHints(false);}
     g.lastX=x;g.lastY=y;
   };
   const pointerUp=(e:ReactPointerEvent<HTMLCanvasElement>)=> {
@@ -176,7 +176,7 @@ export default function FluidLab() {
             <ValueControl label="ピストン方向" value={node.strokeAngle*180/Math.PI} min={0} max={360} step={1} unit="°" onStart={beforeEdit} onChange={v=>edit(node,{strokeAngle:v*Math.PI/180})}/>
             <label className="toggle-row"><input type="checkbox" checked={node.repeat} onChange={e=>{beforeEdit();edit(node,{repeat:e.target.checked,bounce:1});}}/><span>ストロークを反復する</span></label><div className="stroke-meter"><span>伸び率</span><progress max={1} value={node.t}/><b>{Math.round(node.t*100)}%</b></div>
           </>}
-          {node.blocked&&<div className="warning">壁・ガイドに接触したため駆動を取り消しました</div>}
+          {node.blocked&&<div className="warning">ガイドまたは盤面端に接触したため駆動を取り消しました</div>}
         </>}
         {(node.kind==='rect'||node.kind==='circle')&&<ValueControl label="角度" value={((nodePose.a*180/Math.PI%360)+360)%360} min={0} max={360} step={1} unit="°" onStart={beforeEdit} onChange={v=>{engine.setWorld(node,nodePose.x,nodePose.y,v*Math.PI/180);engine.rasterize();refresh();}}/>}
         <div className="section-label">接続 <span>JOINT</span></div><label className="text-field">親オブジェクト<select aria-label="親オブジェクト" value={node.parent??''} onChange={e=>{beforeEdit();if(!engine.reparent(node.id,e.target.value===''?null:Number(e.target.value)))inform('循環する接続は作れません');engine.rasterize();refresh();}}><option value="">背景</option>{engine.nodes.filter(n=>!engine.isDescendant(n.id,node.id)).map(n=><option value={n.id} key={n.id}>{n.name} #{n.id}</option>)}</select></label>
@@ -188,7 +188,7 @@ export default function FluidLab() {
       </>}
     </FloatingPanel>
     <FloatingPanel title="オブジェクト" icon={Layers} initial={{x:Math.max(16,initialSize.width-(initialSize.width<600?171:270)),y:initialSize.width<600?129:Math.min(460,Math.max(320,initialSize.height-300))}} className="objects-panel">
-      <div className="tree-root"><ChevronDown size={13}/><Grid2X2 size={13}/><span>背景</span><b>{engine.nodes.length}</b></div><div className="object-tree">{treeRows.length?treeRows.map(({node:n,depth})=><div className={`tree-row ${selected.has(n.id)?'selected':''}`} key={n.id} style={{paddingLeft:12+depth*13}}><button className="tree-select" onClick={e=>{setTool('select');setSelected(s=>{if(e.shiftKey){const next=new Set(s);if(next.has(n.id))next.delete(n.id);else next.add(n.id);return next;}return new Set([n.id]);});}}><NodeIcon node={n}/><span>{n.name}</span>{n.blocked&&<i className="blocked-dot" title="壁・ガイドに接触"/>}</button><button title={`${n.joint==='fixed'?'固定':'フリー'}関節 · クリックで切替`} aria-label={`${n.name}の関節切替`} className={`joint-tag ${n.joint}`} onClick={()=>{beforeEdit();engine.setJoint(n.id,n.joint==='fixed'?'free':'fixed');refresh();}}>{n.joint==='fixed'?'固定':'自由'}</button></div>):<p className="tree-empty">モーターや可動壁を配置すると<br/>接続関係がここに表示されます。</p>}</div><div className="tree-footer"><span>Shift + クリックで複数選択</span><button title="盤面を全消去 · Undo可能" aria-label="盤面を全消去" onClick={()=>{engine.checkpoint();engine.clear();setSelected(new Set());setHints(false);refresh();inform('盤面を空にしました · Undo で戻せます');}}><Trash2 size={13}/></button></div>
+      <div className="tree-root"><ChevronDown size={13}/><Grid2X2 size={13}/><span>背景</span><b>{engine.nodes.length}</b></div><div className="object-tree">{treeRows.length?treeRows.map(({node:n,depth})=><div className={`tree-row ${selected.has(n.id)?'selected':''}`} key={n.id} style={{paddingLeft:12+depth*13}}><button className="tree-select" onClick={e=>{setTool('select');setSelected(s=>{if(e.shiftKey){const next=new Set(s);if(next.has(n.id))next.delete(n.id);else next.add(n.id);return next;}return new Set([n.id]);});}}><NodeIcon node={n}/><span>{n.name}</span>{n.blocked&&<i className="blocked-dot" title="ガイドまたは盤面端に接触"/>}</button><button title={`${n.joint==='fixed'?'固定':'フリー'}関節 · クリックで切替`} aria-label={`${n.name}の関節切替`} className={`joint-tag ${n.joint}`} onClick={()=>{beforeEdit();engine.setJoint(n.id,n.joint==='fixed'?'free':'fixed');refresh();}}>{n.joint==='fixed'?'固定':'自由'}</button></div>):<p className="tree-empty">モーターや可動壁を配置すると<br/>接続関係がここに表示されます。</p>}</div><div className="tree-footer"><span>Shift + クリックで複数選択</span><button title="盤面を全消去 · Undo可能" aria-label="盤面を全消去" onClick={()=>{engine.checkpoint();engine.clear();setSelected(new Set());setHints(false);refresh();inform('盤面を空にしました · Undo で戻せます');}}><Trash2 size={13}/></button></div>
     </FloatingPanel>
     <footer className="statusbar"><span className={`status-indicator ${running?'playing':''}`}/><span>{running?'シミュレーション実行中':'編集モード · 停止中'}</span><span className="status-separator"/><span className="cursor-status">X <b>{cursor?.x??'—'}</b> Y <b>{cursor?.y??'—'}</b>{cursor&&<><i/><span>{MATERIALS[cursor.material]?.name??'空気'}</span><b>{cursor.temperature.toFixed(1)}°C</b></>}</span><span className="status-right"><span>{stats.count.toLocaleString()} セル</span>{engine.trapped.length>0&&<span title="逃げ場ができると盤面に戻ります">{engine.trapped.length} 粒子を一時保持</span>}<span>{(stats.tick/60).toFixed(1)} s</span><span className={stats.fps<30?'low-fps':''}>{stats.fps} FPS</span></span></footer>
     {notice&&<div className="toast" role="status"><Check size={16}/>{notice}</div>}

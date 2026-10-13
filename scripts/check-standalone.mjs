@@ -1,0 +1,65 @@
+import { chromium, expect } from '@playwright/test';
+import { resolve, dirname } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { mkdir, readFile } from 'node:fs/promises';
+
+const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_EXECUTABLE_PATH });
+try {
+  const context = await browser.newContext({ offline: true, viewport: { width: 1366, height: 900 } });
+  const page = await context.newPage();
+  const errors = [], external = [];
+  const httpMode = process.env.STANDALONE_TEST_VIA_HTTP === '1';
+  const url = httpMode ? 'http://127.0.0.1:5199/' : pathToFileURL(resolve(root, 'cell-fluid-lab.html')).href;
+  if (httpMode) {
+    const html = await readFile(resolve(root, 'cell-fluid-lab.html'), 'utf8');
+    await page.route(url, route => route.fulfill({ contentType: 'text/html; charset=utf-8', body: html }));
+  }
+  page.on('pageerror', error => errors.push(error.message));
+  page.on('request', request => { if (/^https?:/.test(request.url()) && request.url() !== url) external.push(request.url()); });
+  await page.goto(url);
+  await expect(page.getByRole('heading', { name: 'セル流体実験台 FLUID LAB' })).toBeVisible();
+  await expect(page.locator('.status-right')).toContainText(/0\.[1-9] s|[1-9]\d*\.\d s/);
+  await page.getByRole('button', { name: '停止 Space', exact: true }).click();
+  await expect(page.getByText('編集モード · 停止中')).toBeVisible();
+  await page.getByRole('button', { name: '保存', exact: true }).click();
+  const initial = await page.evaluate(() => JSON.parse(localStorage.getItem('cell-fluid-lab-v1')));
+  expect(initial.nodes).toHaveLength(6);
+  expect(initial.cells.some(n => n === 1)).toBe(true);
+  await page.getByRole('button', { name: '盤面を全消去' }).click();
+  await page.getByRole('button', { name: '水', exact: true }).click();
+  const board = await page.getByLabel('流体実験キャンバス').boundingBox();
+  const at = (x,y) => [board.x + board.width*x/400, board.y + board.height*y/224];
+  await page.mouse.click(...at(200,100));
+  await page.getByRole('button', { name: '保存', exact: true }).click();
+  const water = await page.evaluate(() => JSON.parse(localStorage.getItem('cell-fluid-lab-v1')));
+  expect(water.cells.filter(n => n === 1).length).toBeGreaterThan(80);
+  await page.keyboard.press('9');
+  await page.mouse.click(...at(220,90));
+  await expect(page.getByLabel('オブジェクト名')).toBeVisible();
+  await page.getByRole('button', { name: 'ピストン', exact: true }).click();
+  await page.getByLabel('ストローク', { exact: true }).fill('60');
+  await page.getByLabel('ストローク', { exact: true }).blur();
+  await page.getByRole('button', { name: '保存', exact: true }).click();
+  const motor = await page.evaluate(() => JSON.parse(localStorage.getItem('cell-fluid-lab-v1')));
+  expect(motor.nodes[0].mode).toBe('piston');
+  expect(motor.nodes[0].amp).toBe(60);
+  await page.reload();
+  await expect(page.getByRole('button', { name: 'モーター', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '停止 Space', exact: true }).click();
+  await page.getByRole('button', { name: '盤面を全消去' }).click();
+  await page.keyboard.press('Control+z');
+  await page.getByRole('button', { name: '保存', exact: true }).click();
+  const undone = await page.evaluate(() => JSON.parse(localStorage.getItem('cell-fluid-lab-v1')));
+  expect(undone.nodes).toHaveLength(1);
+  expect(undone.cells.some(n => n === 1)).toBe(true);
+  expect(errors).toEqual([]);
+  expect(external).toEqual([]);
+  await page.getByRole('button', { name: '見本', exact: true }).click();
+  await mkdir(resolve(root, 'test-results'), { recursive: true });
+  await page.screenshot({ path: resolve(root, 'test-results/standalone.png') });
+  console.log(`PASS: ${httpMode ? 'single HTML via intercepted HTTP (no server)' : 'file://'} + offline, animation, editing, piston settings, localStorage reload, Undo; zero external dependencies and JavaScript errors.`);
+  await context.close();
+} finally {
+  await browser.close();
+}

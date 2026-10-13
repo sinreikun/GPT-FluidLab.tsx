@@ -138,3 +138,26 @@ describe('placed temperature controllers',()=>{
     loaded.checkpoint();loaded.delete(new Set([n.id]));expect(loaded.nodes).toHaveLength(0);loaded.undo();expect(loaded.nodes[0].effectRadius).toBe(23);
   });
 });
+
+describe('material-specific flow',()=>{
+  it.each([1,3])('liquid %s levels a mound across a basin while conserving particles',m=>{
+    const e=new Engine();e.conductivity.fill(0);e.terrainShape(80,120,140,120,1);e.terrainShape(80,70,80,120,1);e.terrainShape(140,70,140,120,1);
+    for(let y=100;y<120;y++){const half=Math.floor((y-100)/2)+1;fill(e,110-half,y,111+half,y+1,m);}
+    const count=e.count();for(let i=0;i<120;i++)e.step();
+    const heights=[];for(let x=81;x<140;x++){let n=0;for(let y=70;y<120;y++)if(e.cells[e.index(x,y)]===m)n++;heights.push(n);}
+    expect(Math.max(...heights)-Math.min(...heights)).toBeLessThanOrEqual(2);expect(e.count()).toBe(count);
+  });
+  it('gas spreads below a ceiling rather than forming an inverted mound',()=>{
+    const e=new Engine();e.conductivity.fill(0);e.terrainShape(80,60,140,60,1);e.terrainShape(80,60,80,100,1);e.terrainShape(140,60,140,100,1);e.terrainShape(80,100,140,100,1);
+    fill(e,104,61,117,75,9);const count=e.count();for(let i=0;i<180;i++)e.step();
+    let left=0,right=0,below=0;for(let i=0;i<SIZE;i++)if(e.cells[i]===9){if(i%W<100)left++;if(i%W>120)right++;if(Math.floor(i/W)>65)below++;}
+    expect(left).toBeGreaterThan(15);expect(right).toBeGreaterThan(15);expect(below).toBeGreaterThan(10);expect(e.count()).toBe(count);
+  });
+  it('solid shape does not melt into flowing material when viscosity is reduced',()=>{
+    const e=new Engine();e.conductivity.fill(0);fill(e,100,80,109,89,6,420);e.viscosity[6]=0;const before=Array.from(e.cells);for(let i=0;i<10;i++)e.step();expect(Array.from(e.cells)).toEqual(before);
+  });
+  it('lateral redistribution cannot cross walls or rigid barriers',()=>{
+    const e=new Engine();e.conductivity.fill(0);e.terrainShape(0,120,W-1,120,1);e.terrainShape(110,50,110,120,1);fill(e,100,105,110,120,3);const count=e.count();for(let i=0;i<70;i++)e.step();
+    for(let i=0;i<SIZE;i++)if(e.cells[i]===3)expect(i%W).toBeLessThan(110);expect(e.count()).toBe(count);
+  });
+});

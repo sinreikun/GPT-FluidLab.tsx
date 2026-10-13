@@ -2,19 +2,19 @@ export const W = 400, H = 224, SIZE = W * H;
 export const STORAGE_KEY = 'cell-fluid-lab-v1';
 export const DT = 1 / 60;
 export const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n));
-export interface Material { name: string; en: string; density: number; viscosity: number; conductivity: number; capacity: number; temperature: number; color: [number, number, number] }
+export interface Material { phase: 'gas' | 'liquid' | 'solid'; name: string; en: string; density: number; viscosity: number; conductivity: number; capacity: number; temperature: number; color: [number, number, number] }
 export const MATERIALS: Material[] = [
-  {name:'空気',en:'AIR',density:0,viscosity:0,conductivity:.04,capacity:.35,temperature:20,color:[12,20,29]},
-  {name:'水',en:'WATER',density:4,viscosity:8,conductivity:.65,capacity:4.2,temperature:20,color:[57,158,235]},
-  {name:'油',en:'OIL',density:2,viscosity:42,conductivity:.15,capacity:2,temperature:25,color:[224,183,67]},
-  {name:'水銀',en:'MERCURY',density:9,viscosity:5,conductivity:.85,capacity:.6,temperature:20,color:[182,198,214]},
-  {name:'氷',en:'ICE',density:3,viscosity:100,conductivity:.75,capacity:2.1,temperature:-12,color:[157,227,243]},
-  {name:'溶岩',en:'LAVA',density:7,viscosity:74,conductivity:.4,capacity:1.5,temperature:1200,color:[245,91,43]},
-  {name:'岩石',en:'ROCK',density:6,viscosity:100,conductivity:.35,capacity:1.2,temperature:420,color:[117,108,105]},
-  {name:'蒸気',en:'STEAM',density:-3,viscosity:4,conductivity:.2,capacity:1.9,temperature:110,color:[174,206,219]},
-  {name:'煙',en:'SMOKE',density:-2,viscosity:14,conductivity:.12,capacity:1,temperature:180,color:[120,131,149]},
-  {name:'水素',en:'HYDROGEN',density:-6,viscosity:0,conductivity:.2,capacity:1.4,temperature:20,color:[160,139,224]},
-  {name:'水銀蒸気',en:'HG VAPOR',density:-1,viscosity:4,conductivity:.25,capacity:.7,temperature:370,color:[156,179,163]},
+  {phase:'gas',name:'空気',en:'AIR',density:0,viscosity:0,conductivity:.04,capacity:.35,temperature:20,color:[12,20,29]},
+  {phase:'liquid',name:'水',en:'WATER',density:4,viscosity:8,conductivity:.65,capacity:4.2,temperature:20,color:[57,158,235]},
+  {phase:'liquid',name:'油',en:'OIL',density:2,viscosity:42,conductivity:.15,capacity:2,temperature:25,color:[224,183,67]},
+  {phase:'liquid',name:'水銀',en:'MERCURY',density:9,viscosity:5,conductivity:.85,capacity:.6,temperature:20,color:[182,198,214]},
+  {phase:'solid',name:'氷',en:'ICE',density:3,viscosity:100,conductivity:.75,capacity:2.1,temperature:-12,color:[157,227,243]},
+  {phase:'liquid',name:'溶岩',en:'LAVA',density:7,viscosity:74,conductivity:.4,capacity:1.5,temperature:1200,color:[245,91,43]},
+  {phase:'solid',name:'岩石',en:'ROCK',density:6,viscosity:100,conductivity:.35,capacity:1.2,temperature:420,color:[117,108,105]},
+  {phase:'gas',name:'蒸気',en:'STEAM',density:-3,viscosity:4,conductivity:.2,capacity:1.9,temperature:110,color:[174,206,219]},
+  {phase:'gas',name:'煙',en:'SMOKE',density:-2,viscosity:14,conductivity:.12,capacity:1,temperature:180,color:[120,131,149]},
+  {phase:'gas',name:'水素',en:'HYDROGEN',density:-6,viscosity:0,conductivity:.2,capacity:1.4,temperature:20,color:[160,139,224]},
+  {phase:'gas',name:'水銀蒸気',en:'HG VAPOR',density:-1,viscosity:4,conductivity:.25,capacity:.7,temperature:370,color:[156,179,163]},
 ];
 export type NodeKind = 'motor' | 'pin' | 'rect' | 'circle' | 'thermostat';
 export interface LabNode {
@@ -328,7 +328,7 @@ export class Engine {
     const tryMove=(i:number,j:number,vertical:number)=> {
       if(j<0||this.terrain[j]===1||this.occupancy[j]||this.moved[j]===stamp)return false;
       const a=this.cells[i],b=this.cells[j];
-      if(b && (this.viscosity[b]===100||vertical===0|| (MATERIALS[a].density-MATERIALS[b].density)*vertical<=0))return false;
+      if(b && (MATERIALS[b].phase==='solid'||this.viscosity[b]===100||vertical===0|| (MATERIALS[a].density-MATERIALS[b].density)*vertical<=0))return false;
       this.cells[j]=a;this.cells[i]=b;
       const t=this.temperature[j];this.temperature[j]=this.temperature[i];this.temperature[i]=t;
       this.moved[i]=stamp;this.moved[j]=stamp;return true;
@@ -338,13 +338,41 @@ export class Engine {
       const y=direction===1?H-1-row:row;
       for(let col=0;col<W;col++){
         const x=reverse?W-1-col:col,i=y*W+x,m=this.cells[i];
-        if(!m||this.moved[i]===stamp||this.occupancy[i]||this.terrain[i]===1||this.viscosity[m]===100||Math.sign(MATERIALS[m].density)!==direction)continue;
-        const viscosity=this.viscosity[m];if(viscosity>50&&this.random()<viscosity/130)continue;
+        if(!m||this.moved[i]===stamp||this.occupancy[i]||this.terrain[i]===1||MATERIALS[m].phase==='solid'||this.viscosity[m]===100||Math.sign(MATERIALS[m].density)!==direction)continue;
+        const viscosity=this.viscosity[m],gas=MATERIALS[m].phase==='gas';
+        // Gas mixes through available space instead of behaving like upside-down sand.
+        const above=this.index(x,y-1);
+        const ceiling=above<0||this.terrain[above]===1||!!this.occupancy[above]||!!this.cells[above];
+        if(gas&&ceiling&&this.random()>.18+Math.abs(MATERIALS[m].density)*.035){
+          const choice=Math.floor(this.random()*4),dx=choice===0?-1:choice===1?1:0,dy=choice===2?1:choice===3?-1:0;
+          if(tryMove(i,this.index(x+dx,y+dy),dy))continue;
+        }
+        if(!gas&&viscosity>50&&this.random()<viscosity/130)continue;
         if(tryMove(i,this.index(x,y+direction),direction))continue;
         const side=this.random()<.5?1:-1;
         if(tryMove(i,this.index(x+side,y+direction),direction)||tryMove(i,this.index(x-side,y+direction),direction))continue;
-        if(this.random()<1-viscosity/100) {
-          if(tryMove(i,this.index(x+side,y),0))continue;tryMove(i,this.index(x-side,y),0);
+        const surface=this.index(x,y-1);
+        if((gas||surface<0||this.cells[surface]!==m)&&this.random()<1-viscosity/100) {
+          // Transmit lateral pressure along a contiguous row of the same material.
+          // Looking beyond occupied neighbours lets liquid surfaces level, while walls,
+          // rigid bodies and other materials keep separate chambers disconnected.
+          const reach=gas?18:Math.max(2,Math.round(28*(1-viscosity/100)));
+          let target=-1,leftOpen=true,rightOpen=true;
+          for(let distance=1;distance<=reach&&target<0&&(leftOpen||rightOpen);distance++){
+            for(let attempt=0;attempt<2;attempt++){
+              const sign=attempt===0?side:-side;if(sign<0?!leftOpen:!rightOpen)continue;
+              const j=this.index(x+sign*distance,y);
+              if(j<0||this.terrain[j]===1||this.occupancy[j]||(this.cells[j]&&this.cells[j]!==m)){
+                if(sign<0)leftOpen=false;else rightOpen=false;continue;
+              }
+              if(!this.cells[j]&&this.moved[j]!==stamp){
+                const below=this.index(j%W,y+1),support=this.index(x,y+1);
+                if(!gas&&support>=0&&this.cells[support]===m&&(below<0||this.terrain[below]===1||this.occupancy[below]||(this.cells[below]&&MATERIALS[this.cells[below]].phase!=='gas')))continue;
+                target=j;break;
+              }
+            }
+          }
+          if(target>=0)tryMove(i,target,0);
         }
       }
     }

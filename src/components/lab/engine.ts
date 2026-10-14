@@ -326,6 +326,21 @@ export class Engine {
     }
     this.trapped=pending;
   }
+  eraseRegion(x0:number,y0:number,x1:number,y1:number,target='all',circle=false){
+    const radius=Math.hypot(x1-x0,y1-y0),left=circle?x0-radius:Math.floor(Math.min(x0,x1)),right=circle?x0+radius:Math.floor(Math.max(x0,x1)),top=circle?y0-radius:Math.floor(Math.min(y0,y1)),bottom=circle?y0+radius:Math.floor(Math.max(y0,y1));
+    const inside=(x:number,y:number)=>circle?(x-x0)**2+(y-y0)**2<=radius*radius:x>=left&&x<=right&&y>=top&&y<=bottom;
+    const materialMatch=(m:number)=>target==='all'||target==='matter'||target===`material:${m}`||target===`phase:${MATERIALS[m].phase}`;
+    for(let y=Math.max(0,Math.floor(top));y<=Math.min(H-1,Math.floor(bottom));y++)for(let x=Math.max(0,Math.floor(left));x<=Math.min(W-1,Math.floor(right));x++){
+      if(!inside(x,y))continue;const i=y*W+x,parts=this.chemistry.components(i),remaining=parts.filter(p=>!materialMatch(p.material));
+      if(remaining.length!==parts.length){this.chemistry.write(i,remaining,this.temperature[i]);this.chemistry.flame[i]=0;}
+      if(target==='all'||target==='wall'&&this.terrain[i]===1||target==='guide'&&this.terrain[i]===2)this.terrain[i]=0;
+      if(target==='all'&&!this.cells[i])this.temperature[i]=20;
+    }
+    this.trapped=this.trapped.flatMap(p=>{if(!inside(p.x,p.y))return [p];const parts=(p.components??[{material:p.material,amount:1}]).filter(c=>!materialMatch(c.material));return parts.length?[{...p,material:parts[0].material,components:parts}]:[];});
+    const poses=this.poses(),deleted=new Set<number>();
+    for(const n of this.nodes){const body=n.kind==='rect'||n.kind==='circle',matches=target==='all'||target==='bodies'&&body||target==='devices'&&!body||target===`kind:${n.kind}`||n.kind==='processor'&&target===`process:${n.process}`;if(!matches)continue;const p=poses.get(n.id)!;let hit=inside(p.x,p.y);if(body&&!hit){const c=Math.abs(Math.cos(p.a)),s=Math.abs(Math.sin(p.a)),rx=n.kind==='circle'?n.radius:(c*n.width+s*n.height)/2,ry=n.kind==='circle'?n.radius:(s*n.width+c*n.height)/2;if(p.x+rx>=left&&p.x-rx<=right&&p.y+ry>=top&&p.y-ry<=bottom)this.shapeCells(n,p,(_i,x,y)=>{if(!hit&&inside(x,y))hit=true;});}if(hit)deleted.add(n.id);}
+    if(deleted.size)this.delete(deleted);else{this.revision++;this.editEpoch++;}
+  }
   paint(x:number,y:number,r:number,material:number,overwrite=false,erase=false) {
     for(let py=Math.max(0,Math.floor(y-r));py<=Math.min(H-1,Math.ceil(y+r));py++)for(let px=Math.max(0,Math.floor(x-r));px<=Math.min(W-1,Math.ceil(x+r));px++){
       if((px-x)**2+(py-y)**2>r*r)continue; const i=py*W+px;

@@ -135,3 +135,15 @@ test('canvas zoom and pan preserve world coordinates, reset and do not edit whil
   await page.getByRole('button',{name:'キャンバス表示をリセット'}).click();await expect(page.getByLabel('キャンバス倍率')).toHaveText('100%');await page.getByRole('button',{name:'キャンバスを縮小'}).click();await expect(page.getByLabel('キャンバス倍率')).toHaveText('80%');
   const outside=await boardPoint(page,5,112);await page.mouse.click(outside.x,outside.y);s=await saveState(page);expect(s.nodes).toHaveLength(2);
 });
+
+test('filtered eraser rectangles preserve other matter, apply on release and support cancellation and Undo',async({page})=>{
+  await page.goto('/');await page.getByRole('button',{name:'停止 Space',exact:true}).click();await page.getByLabel('実験見本').selectOption('extraction-cycle');await page.getByRole('button',{name:'見本',exact:true}).click();
+  await page.keyboard.press('2');await page.getByLabel('消去対象').selectOption('material:11');await page.getByRole('button',{name:'範囲消去',exact:true}).click();
+  const initial=await saveState(page);await dragCell(page,100,180,110,190);let s=await saveState(page);const i=185*400+105;expect(s.chemistry.secondary[i]).toBe(0);expect(s.cells[i]).toBe(1);expect(s.chemistry.amount[i]).toBeCloseTo(.9);expect(s.nodes).toHaveLength(initial.nodes.length);expect(s.terrain).toEqual(initial.terrain);
+  await page.keyboard.press('Control+z');s=await saveState(page);expect(s.chemistry.secondary[i]).toBe(11);
+  const a=await boardPoint(page,100,180),b=await boardPoint(page,110,190);await page.mouse.move(a.x,a.y);await page.mouse.down();await page.mouse.move(b.x,b.y);await page.keyboard.press('Escape');await page.mouse.up();s=await saveState(page);expect(s.chemistry.secondary[i]).toBe(11);
+});
+
+test('dedicated range selection starts on an object without moving it',async({page})=>{
+  await page.goto('/');await page.getByRole('button',{name:'停止 Space',exact:true}).click();await page.getByRole('button',{name:'盤面を全消去'}).click();await page.keyboard.press('9');await clickCell(page,180,110);await page.keyboard.press('9');await clickCell(page,210,120);const initial=await saveState(page);await page.keyboard.press('r');await dragCell(page,180,110,220,130);await expect(page.getByText('2 個のオブジェクトを選択')).toBeVisible();const state=await saveState(page);expect(state.nodes).toEqual(initial.nodes);
+});

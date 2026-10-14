@@ -82,6 +82,10 @@ try {
   await expect.poll(async()=>{await page.getByRole('button',{name:'保存',exact:true}).click();return page.evaluate(()=>Math.min(...JSON.parse(localStorage.getItem('cell-fluid-lab-v1')).nodes.filter(n=>n.kind==='processor').map(n=>n.transported)));}).toBeGreaterThan(.05);
   await page.getByRole('button', {name:'停止 Space',exact:true}).click();
   expect(errors).toEqual([]);expect(external).toEqual([]);
+  await page.keyboard.press('2');
+  await page.getByLabel('消去対象').selectOption('material:11');
+  await page.getByRole('button',{name:'範囲消去',exact:true}).click();
+  await expect(page.getByRole('button',{name:'範囲消去',exact:true})).toHaveAttribute('aria-pressed','true');
   await page.screenshot({ path: resolve(root, 'test-results/standalone.png') });
   console.log(`PASS: ${httpMode ? 'single HTML via intercepted HTTP (no server)' : 'file://'} + offline, embedded CPU Worker, animation, editing, piston settings, localStorage reload, Undo, mixed cells, experiment presets, membrane settings, concentration view and three closed material cycles; zero external dependencies and JavaScript errors.`);
   await context.close();

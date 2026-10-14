@@ -108,7 +108,7 @@ export class Renderer {
       label(79,84,'01','密度と攪拌','油は浮き、水銀は沈む');label(188,125,'02','熱と相変化','水と溶岩の境界を観察');label(191,42,'03','気体の上昇','水素は上へ');
     }
     if(opts.preview) {
-      const p=opts.preview;ctx.strokeStyle='#87eed4';ctx.fillStyle='#87eed419';ctx.lineWidth=.6;ctx.setLineDash([2,1]);ctx.beginPath();
+      const p=opts.preview;ctx.strokeStyle=p.tool==='eraseRange'?'#f19a8b':'#87eed4';ctx.fillStyle=p.tool==='eraseRange'?'#f19a8b22':'#87eed419';ctx.lineWidth=.6;ctx.setLineDash([2,1]);ctx.beginPath();
       if(p.tool.endsWith('Circle'))ctx.arc(p.x0,p.y0,Math.hypot(p.x1-p.x0,p.y1-p.y0),0,Math.PI*2);else ctx.rect(Math.min(p.x0,p.x1),Math.min(p.y0,p.y1),Math.abs(p.x1-p.x0),Math.abs(p.y1-p.y0));ctx.fill();ctx.stroke();ctx.setLineDash([]);
       ctx.font='2.5px system-ui';ctx.fillStyle='#bdeddd';ctx.fillText(p.tool.endsWith('Circle')?`r ${Math.hypot(p.x1-p.x0,p.y1-p.y0).toFixed(0)}`:`${Math.abs(p.x1-p.x0).toFixed(0)} × ${Math.abs(p.y1-p.y0).toFixed(0)}`,p.x1+2,p.y1-2);
     }

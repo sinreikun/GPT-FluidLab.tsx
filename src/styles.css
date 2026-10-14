@@ -11,3 +11,7 @@
 .joint-tag.spring{color:#f4d17e;border-color:#796138;background:#3e3528}.tool-connect{cursor:crosshair}
 
 .material-group{width:100%;margin:0 0 8px;background:#14242e;color:#bed3da;border:1px solid #334651;border-radius:5px;padding:5px}.properties-panel details>summary{cursor:pointer;color:#a5cbbd;margin:8px 0}.cycle-progress{font-variant-numeric:tabular-nums}
+
+.zoom-controls{position:absolute;z-index:2;bottom:82px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:3px;background:#16262feb;border:1px solid #34515d;border-radius:6px;padding:3px}.zoom-controls button{height:25px;padding:0 8px}.zoom-controls output{min-width:45px;text-align:center;font-size:10px;font-variant-numeric:tabular-nums}@media(max-width:600px){.zoom-controls{bottom:82px}}
+
+.board.pan-mode{cursor:grab}.zoom-controls button.active{background:#284a3c;color:#a2ecd0}

@@ -124,3 +124,14 @@ test('three closed cycles expose processor controls, finite air and persist thei
   await page.getByRole('button',{name:'再生 Space',exact:true}).click();await expect.poll(async()=>{const state=await saveState(page);return Math.min(...state.nodes.filter((n:any)=>n.kind==='processor').map((n:any)=>n.transported));},{timeout:15000}).toBeGreaterThan(.1);await page.getByRole('button',{name:'停止 Space',exact:true}).click();s=await saveState(page);expect(mass(s)).toBeCloseTo(initial,4);expect(s.nodes.some((n:any)=>n.energyUsed>0)).toBe(true);expect(s.nodes.some((n:any)=>n.heatRemoved>0)).toBe(true);await page.screenshot({path:'test-results/cycles.png'});
   await page.reload();await page.getByRole('button',{name:'停止 Space',exact:true}).click();await page.getByRole('button',{name:'水素循環 · 電解槽',exact:true}).click();await expect(page.getByLabel('処理方式')).toHaveValue('electrolysis');await page.getByLabel('電力・冷却能力',{exact:true}).fill('0');await page.getByLabel('電力・冷却能力',{exact:true}).blur();s=await saveState(page);expect(s.nodes.find((n:any)=>n.process==='electrolysis').power).toBe(0);expect(errors).toEqual([]);
 });
+
+test('canvas zoom and pan preserve world coordinates, reset and do not edit while panning',async({page})=>{
+  await page.goto('/');await page.getByRole('button',{name:'停止 Space',exact:true}).click();await page.getByRole('button',{name:'盤面を全消去'}).click();
+  await page.getByRole('button',{name:'キャンバスを拡大',exact:true}).click();await expect(page.getByLabel('キャンバス倍率')).toHaveText('125%');
+  await page.keyboard.press('9');await clickCell(page,200,112);let s=await saveState(page);expect(s.nodes).toHaveLength(1);expect(s.nodes[0].lx).toBe(200.5);expect(s.nodes[0].ly).toBe(112.5);
+  const center=await boardPoint(page,200,112),b=await page.getByLabel('流体実験キャンバス').boundingBox();await page.getByRole('button',{name:'表示移動モード',exact:true}).click();await page.mouse.move(center.x,center.y);await page.mouse.down();await page.mouse.move(center.x+40,center.y);await page.mouse.up();await page.getByRole('button',{name:'表示移動モード',exact:true}).click();s=await saveState(page);expect(s.nodes).toHaveLength(1);expect(s.nodes[0].lx).toBe(200.5);
+  await page.keyboard.press('9');await clickCell(page,200,112);s=await saveState(page);expect(s.nodes).toHaveLength(2);expect(s.nodes[1].lx).toBeCloseTo(Math.floor(200-40/b!.width*400/1.25)+.5,5);
+  await page.mouse.move(center.x,center.y);await page.mouse.wheel(0,-120);await expect(page.getByLabel('キャンバス倍率')).not.toHaveText('125%');
+  await page.getByRole('button',{name:'キャンバス表示をリセット'}).click();await expect(page.getByLabel('キャンバス倍率')).toHaveText('100%');await page.getByRole('button',{name:'キャンバスを縮小'}).click();await expect(page.getByLabel('キャンバス倍率')).toHaveText('80%');
+  const outside=await boardPoint(page,5,112);await page.mouse.click(outside.x,outside.y);s=await saveState(page);expect(s.nodes).toHaveLength(2);
+});

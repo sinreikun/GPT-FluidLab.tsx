@@ -1,7 +1,8 @@
+import {type Camera} from './camera';
 import {processPorts,PROCESSES} from './processes';
 import {cycleLabels} from './cycle-demos';
 import { Engine, W, H, SIZE, MATERIALS, type Pose } from './engine';
-export interface RenderOptions { selected: Set<number>; temperature: boolean; view?: 'matter'|'temperature'|'component'|'flow'; component?:number; connections: boolean; grid: boolean; hints: boolean; preview?: {tool:string;x0:number;y0:number;x1:number;y1:number}; cursor?:{x:number;y:number;radius:number;tool:string} }
+export interface RenderOptions { camera?:Camera; selected: Set<number>; temperature: boolean; view?: 'matter'|'temperature'|'component'|'flow'; component?:number; connections: boolean; grid: boolean; hints: boolean; preview?: {tool:string;x0:number;y0:number;x1:number;y1:number}; cursor?:{x:number;y:number;radius:number;tool:string} }
 export class Renderer {
   private buffer=document.createElement('canvas');
   private image:ImageData;
@@ -33,7 +34,7 @@ export class Renderer {
       data[i*4]=r;data[i*4+1]=g;data[i*4+2]=b;data[i*4+3]=255;
     }
     this.buffer.getContext('2d')!.putImageData(this.image,0,0);
-    ctx.save();ctx.setTransform(ctx.canvas.width/W,0,0,ctx.canvas.height/H,0,0);ctx.imageSmoothingEnabled=false;
+    ctx.save();ctx.setTransform(1,0,0,1,0,0);ctx.fillStyle='#071018';ctx.fillRect(0,0,ctx.canvas.width,ctx.canvas.height);ctx.setTransform(ctx.canvas.width/W,0,0,ctx.canvas.height/H,0,0);const camera=opts.camera;if(camera){ctx.translate(W/2,H/2);ctx.scale(camera.zoom,camera.zoom);ctx.translate(-camera.x,-camera.y);}ctx.imageSmoothingEnabled=false;
     ctx.drawImage(this.buffer,0,0);
     if(opts.grid) {ctx.strokeStyle='rgba(102,139,161,.09)';ctx.lineWidth=.25;ctx.beginPath();for(let x=0;x<=W;x+=20){ctx.moveTo(x,0);ctx.lineTo(x,H);}for(let y=0;y<=H;y+=20){ctx.moveTo(0,y);ctx.lineTo(W,y);}ctx.stroke();}
     const poses=engine.poses();

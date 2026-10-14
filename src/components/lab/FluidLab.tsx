@@ -4,6 +4,7 @@ import { Engine, MATERIALS, W, H, DT, STORAGE_KEY, clamp, type LabNode, type Pos
 import SimulationWorker from './simulation.worker?worker&inline';
 import {SimulationRunner} from './simulation-runner';
 import {PROCESSES,type Process,type CustomPorts} from './processes';
+import {defaultCamera,zoomCamera,worldPoint,constrainCamera,type Camera} from './camera';
 import { REACTIONS } from './chemistry';
 import { Renderer, type RenderOptions } from './renderer';
 
@@ -49,6 +50,10 @@ export default function FluidLab() {
   const engineRef=useRef<Engine|null>(null);
   if(!engineRef.current){const e=new Engine();let loaded=false;try{const raw=localStorage.getItem(STORAGE_KEY);if(raw)loaded=e.load(raw);}catch{/* Storage may be unavailable; editing still works. */}if(!loaded)e.demo();engineRef.current=e;}
   const engine=engineRef.current;
+  const cameraRef=useRef<Camera>(defaultCamera()),panRef=useRef<{x:number;y:number;camera:Camera}|null>(null);
+  const [camera,setCamera]=useState(defaultCamera);
+  const [panMode,setPanMode]=useState(false),panModeRef=useRef(false);
+  const updateCamera=(next:Camera)=>{cameraRef.current=next;setCamera(next);};
   const simulation=useRef<SimulationRunner|null>(null);
   const canvas=useRef<HTMLCanvasElement>(null),gesture=useRef<Gesture|null>(null),cursorRef=useRef<{x:number;y:number}|null>(null);
   const [running,setRunning]=useState(true),[speed,setSpeed]=useState(1),[tool,setTool]=useState<Tool>('fluid'),[material,setMaterial]=useState(1),[radius,setRadius]=useState(6);
@@ -85,20 +90,20 @@ export default function FluidLab() {
     let worker:Worker|null=null;try{worker=new SimulationWorker();}catch{/* CPU fallback for browsers that restrict Workers. */}
     const runner=new SimulationRunner(engine,worker);simulation.current=runner;
     let frame=0,last=performance.now(),report=last,frames=0,reportedTick=engine.tick;
-    const wheel=(e:WheelEvent)=>{e.preventDefault();setRadius(r=>clamp(r+(e.deltaY>0?-1:1),1,28));};element.addEventListener('wheel',wheel,{passive:false});
+    const wheel=(e:WheelEvent)=>{e.preventDefault();if(gesture.current||panRef.current)return;if(e.shiftKey){setRadius(r=>clamp(r+(e.deltaY>0?-1:1),1,28));return;}const rect=element.getBoundingClientRect();updateCamera(zoomCamera(cameraRef.current,Math.exp(-clamp(e.deltaY,-120,120)*.002),(e.clientX-rect.left)/rect.width*W,(e.clientY-rect.top)/rect.height*H));};element.addEventListener('wheel',wheel,{passive:false});
     const loop=(now:number)=> {
       const state=live.current,elapsed=Math.min((now-last)/1000,.1);last=now;
       // Editing gestures are transactions; physics resumes immediately after release.
       runner.advance(elapsed,state.speed,state.running&&!gesture.current);
       const g=gesture.current;
-      const options:RenderOptions={selected:state.selected,temperature:state.view==='temperature'||state.thermal,view:state.view,component:state.component,connections:state.connections,grid:state.grid,hints:state.hints,cursor:cursorRef.current?{...cursorRef.current,radius:state.radius,tool:g?.tool??state.tool}:undefined,preview:g&&(g.mode==='shape'||g.mode==='range')?{tool:g.tool,x0:g.x,y0:g.y,x1:g.endX,y1:g.endY}:undefined};
+      const options:RenderOptions={camera:cameraRef.current,selected:state.selected,temperature:state.view==='temperature'||state.thermal,view:state.view,component:state.component,connections:state.connections,grid:state.grid,hints:state.hints,cursor:cursorRef.current?{...cursorRef.current,radius:state.radius,tool:g?.tool??state.tool}:undefined,preview:g&&(g.mode==='shape'||g.mode==='range')?{tool:g.tool,x0:g.x,y0:g.y,x1:g.endX,y1:g.endY}:undefined};
       renderer.render(ctx,engine,options);frames++;
       if(now-report>350){setStats({count:engine.count(),fps:Math.round(frames*1000/(now-report)),tick:engine.tick,rate:Math.max(0,(engine.tick-reportedTick)*DT*1000/(now-report)),stepMs:runner.stepMilliseconds,mass:engine.totalMass()});reportedTick=engine.tick;frames=0;report=now;refresh();const c=cursorRef.current;if(c){const i=engine.index(c.x,c.y);setCursor({x:Math.floor(c.x),y:Math.floor(c.y),material:engine.cells[i]??0,temperature:engine.temperature[i]??20});}}
       frame=requestAnimationFrame(loop);
     };frame=requestAnimationFrame(loop);
     return()=>{runner.dispose();simulation.current=null;cancelAnimationFrame(frame);element.removeEventListener('wheel',wheel);if(noticeTimer.current)clearTimeout(noticeTimer.current);};
   },[]);
-  const point=(e:ReactPointerEvent<HTMLCanvasElement>)=>{const rect=e.currentTarget.getBoundingClientRect();return{x:clamp((e.clientX-rect.left)/rect.width*W,0,W-.001),y:clamp((e.clientY-rect.top)/rect.height*H,0,H-.001)};};
+  const point=(e:ReactPointerEvent<HTMLCanvasElement>)=>{const rect=e.currentTarget.getBoundingClientRect();return worldPoint(cameraRef.current,(e.clientX-rect.left)/rect.width*W,(e.clientY-rect.top)/rect.height*H);};
   const paint=(x:number,y:number,t:Tool,overwrite:boolean)=> {
     if(t==='heat'||t==='cool') {
       for(let py=Math.max(0,Math.floor(y-radius));py<=Math.min(H-1,Math.ceil(y+radius));py++)for(let px=Math.max(0,Math.floor(x-radius));px<=Math.min(W-1,Math.ceil(x+radius));px++)if((px-x)**2+(py-y)**2<=radius*radius){const i=py*W+px;engine.temperature[i]=clamp(engine.temperature[i]+(t==='heat'?35:-25),-273,2000);}
@@ -107,9 +112,10 @@ export default function FluidLab() {
   const connection=useRef<number|null>(null);
   useEffect(()=>{connection.current=null;},[tool]);
   const pointerDown=(e:ReactPointerEvent<HTMLCanvasElement>)=> {
+    if(e.button===1||e.button===0&&(e.altKey||panModeRef.current)){e.preventDefault();e.currentTarget.setPointerCapture(e.pointerId);panRef.current={x:e.clientX,y:e.clientY,camera:{...cameraRef.current}};cursorRef.current=null;return;}
     if(e.button!==0&&e.button!==2)return;e.preventDefault();e.currentTarget.setPointerCapture(e.pointerId);
     simulation.current?.invalidate();
-    const p=point(e),t=e.button===2?'erase':tool;cursorRef.current=p;
+    const p=point(e),t=e.button===2?'erase':tool;if(p.x<0||p.y<0||p.x>=W||p.y>=H)return;cursorRef.current=p;
     const base:Gesture={mode:'paint',tool:t,x:p.x,y:p.y,lastX:p.x,lastY:p.y,endX:p.x,endY:p.y,changed:false};
     if(t==='connect'){const hit=engine.hit(p.x,p.y);if(connection.current===null){if(hit){connection.current=hit.id;setSelected(new Set([hit.id]));inform('親をクリック · 空白で背景へ切離し');}}else{const child=connection.current;if(hit?.id===child){connection.current=null;inform('接続を解除しました');return;}engine.checkpoint();if(engine.reparent(child,hit?.id??null)){engine.rasterize();inform('接続しました · 支点は選択ツールで移動できます');}else{engine.history.pop();inform('循環する接続はできません');}connection.current=null;refresh();}return;}
     if(t==='select') {
@@ -130,7 +136,8 @@ export default function FluidLab() {
     gesture.current=base;refresh();
   };
   const pointerMove=(e:ReactPointerEvent<HTMLCanvasElement>)=> {
-    const p=point(e);cursorRef.current=p;const i=engine.index(p.x,p.y);setCursor({x:Math.floor(p.x),y:Math.floor(p.y),material:engine.cells[i],temperature:engine.temperature[i]});
+    const pan=panRef.current;if(pan){const rect=e.currentTarget.getBoundingClientRect();updateCamera(constrainCamera({...pan.camera,x:pan.camera.x-(e.clientX-pan.x)/rect.width*W/pan.camera.zoom,y:pan.camera.y-(e.clientY-pan.y)/rect.height*H/pan.camera.zoom}));return;}
+    const p=point(e);if(p.x<0||p.y<0||p.x>=W||p.y>=H){cursorRef.current=null;setCursor(null);if(!gesture.current)return;p.x=clamp(p.x,0,W-.001);p.y=clamp(p.y,0,H-.001);}cursorRef.current=p;const i=engine.index(p.x,p.y);setCursor({x:Math.floor(p.x),y:Math.floor(p.y),material:engine.cells[i],temperature:engine.temperature[i]});
     const g=gesture.current;if(!g)return;
     let x=g.mode==='shape'?Math.floor(p.x)+.5:p.x,y=g.mode==='shape'?Math.floor(p.y)+.5:p.y;
     if(g.mode==='shape'&&e.shiftKey&&!g.tool.endsWith('Circle')){const sx=x>=g.x?1:-1,sy=y>=g.y?1:-1;const side=Math.min(Math.max(Math.abs(x-g.x),Math.abs(y-g.y)),sx>0?W-.5-g.x:g.x-.5,sy>0?H-.5-g.y:g.y-.5);x=g.x+sx*side;y=g.y+sy*side;}
@@ -141,6 +148,7 @@ export default function FluidLab() {
     g.lastX=x;g.lastY=y;
   };
   const pointerUp=(e:ReactPointerEvent<HTMLCanvasElement>)=> {
+    if(panRef.current){panRef.current=null;if(e.currentTarget.hasPointerCapture(e.pointerId))e.currentTarget.releasePointerCapture(e.pointerId);return;}
     const g=gesture.current;if(!g)return;
     const x=g.endX,y=g.endY;
     if(g.mode==='shape') {
@@ -170,12 +178,13 @@ export default function FluidLab() {
     </header>
     <div className="workspace">
       <div className="workspace-label"><span className="live-dot"/>CELLULAR PHYSICS <span className="dim">/ 400 × 224</span></div>
-      <div className="canvas-fit"><canvas ref={canvas} width={1600} height={896} aria-label="流体実験キャンバス" className={`board tool-${tool}`} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp} onPointerCancel={pointerUp} onLostPointerCapture={()=>{if(gesture.current){gesture.current=null;refresh();}}} onPointerLeave={()=>{if(!gesture.current){cursorRef.current=null;setCursor(null);}}} onContextMenu={e=>e.preventDefault()}/></div>
+      <div className="canvas-fit"><canvas ref={canvas} width={1600} height={896} aria-label="流体実験キャンバス" className={`board tool-${tool}${panMode?' pan-mode':''}`} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp} onPointerCancel={pointerUp} onLostPointerCapture={()=>{panRef.current=null;if(gesture.current){gesture.current=null;refresh();}}} onPointerLeave={()=>{if(!gesture.current){cursorRef.current=null;setCursor(null);}}} onContextMenu={e=>e.preventDefault()}/></div>
+      <div className="zoom-controls"><button aria-label="キャンバスを縮小" disabled={camera.zoom<=.5} onClick={()=>updateCamera(zoomCamera(cameraRef.current,1/1.25))}><Minus size={14}/></button><output aria-label="キャンバス倍率">{Math.round(camera.zoom*100)}%</output><button aria-label="キャンバスを拡大" disabled={camera.zoom>=8} onClick={()=>updateCamera(zoomCamera(cameraRef.current,1.25))}><Plus size={14}/></button><button aria-label="表示移動モード" aria-pressed={panMode} className={panMode?'active':''} title="オンの間はドラッグで表示を移動" onClick={()=>{panModeRef.current=!panModeRef.current;setPanMode(panModeRef.current);}}>移動</button><button aria-label="キャンバス表示をリセット" onClick={()=>updateCamera(defaultCamera())}>全体</button></div>
       <div className="view-controls"><button className={grid?'active':''} title="グリッド表示" aria-label="グリッド表示" aria-pressed={grid} onClick={()=>setGrid(!grid)}><Grid2X2 size={14}/></button><button className={connections?'active':''} title="接続線表示" aria-label="接続線表示" aria-pressed={connections} onClick={()=>setConnections(!connections)}><GitBranch size={14}/></button><button className={thermal?'active':''} aria-pressed={thermal} onClick={()=>{setThermal(!thermal);setView(thermal?'matter':'temperature');}}><Thermometer size={14}/><span>温度</span></button></div>
       <div className="observation-controls"><select aria-label="観察モード" value={view} onChange={e=>{setView(e.target.value as typeof view);setThermal(e.target.value==='temperature');}}><option value="matter">物質表示</option><option value="temperature">温度表示</option><option value="component">成分濃度</option><option value="flow">流れ・装置</option></select>{view==='component'&&<select aria-label="観察成分" value={component} onChange={e=>setComponent(Number(e.target.value))}>{MATERIALS.slice(1).map((m,i)=><option key={m.id} value={i+1}>{m.name}</option>)}</select>}</div>
       {engine.experimentTitle&&<div className="experiment-caption"><strong>{engine.experimentTitle}</strong><span>{engine.experimentDescription}</span></div>}
       {thermal&&<div className="temperature-legend"><span>−20°</span><i/><span>1,200°C</span></div>}
-      <div className="canvas-footer"><span><span className="keycap">{currentTool.key||'↗'}</span>{currentTool.name}</span><span>右クリックで消去 <b>·</b> ホイールでブラシ調整</span></div>
+      <div className="canvas-footer"><span><span className="keycap">{currentTool.key||'↗'}</span>{currentTool.name}</span><span>右クリックで消去 <b>·</b> ホイールで拡大縮小 · Alt＋ドラッグで表示移動</span></div>
     </div>
     <FloatingPanel title="ツール" icon={Wrench} initial={{x:16,y:86}} className="tools-panel">
       <div className="playback"><button className={`play-button ${running?'running':''}`} onClick={toggleRunning}>{running?<Pause size={15}/>:<Play size={15}/>}<span>{running?'停止':'再生'}</span><kbd>Space</kbd></button><div className="speed-switch">{[1,2,3].map(s=><button key={s} className={speed===s?'active':''} onClick={()=>setSpeed(s)}>{s}×</button>)}</div></div>
@@ -237,7 +246,7 @@ export default function FluidLab() {
     </FloatingPanel>
     <footer className="statusbar"><span className={`status-indicator ${running?'playing':''}`}/><span>{running?'シミュレーション実行中':'編集モード · 停止中'}</span><span className="status-separator"/><span className="cursor-status">X <b>{cursor?.x??'—'}</b> Y <b>{cursor?.y??'—'}</b>{cursor&&<><i/><span>{engine.chemistry.components(engine.index(cursor.x,cursor.y)).map(p=>`${MATERIALS[p.material].name} ${(p.amount/engine.chemistry.mass(engine.index(cursor.x,cursor.y))*100).toFixed(0)}%`).join(' / ')||'空気'}</span><b>{cursor.temperature.toFixed(1)}°C</b><span>量 {engine.chemistry.mass(engine.index(cursor.x,cursor.y)).toFixed(2)}</span></>}</span><span className="status-right"><span>{stats.count.toLocaleString()} セル / 量 {stats.mass.toFixed(1)}</span>{engine.trapped.length>0&&<span title="逃げ場ができると盤面に戻ります">{engine.trapped.length} 粒子を一時保持</span>}<span>{(stats.tick/60).toFixed(1)} s</span><span title="1.00×が実時間。高負荷では進行を遅くして操作応答を保ちます">進行 {stats.rate.toFixed(2)}×</span><span title="シミュレーション1ステップの計算時間">{stats.stepMs.toFixed(1)} ms</span><span className={stats.fps<30?'low-fps':''}>{stats.fps} FPS</span></span></footer>
     {notice&&<div className="toast" role="status"><Check size={16}/>{notice}</div>}
-    {help&&<div className="modal-backdrop" onClick={()=>setHelp(false)}><section className="help-modal" aria-modal="true" role="dialog" aria-label="操作ガイド" onClick={e=>e.stopPropagation()}><button className="modal-close icon-button" aria-label="ガイドを閉じる" onClick={()=>setHelp(false)}><X size={19}/></button><FlaskConical size={30}/><h2>小さなセルから、実験を。</h2><p>物質を置いて、機械で動かして、その変化を観察する。</p><div className="reaction-card"><strong>{REACTIONS[0].name}</strong><p>{REACTIONS[0].ratio} · {REACTIONS[0].temperature}</p><p>晶塩は水に溶け、冷却で析出。揮発溶媒は65°Cから蒸発。抽出液は水と分離し、晶塩の回収に使えます。</p></div><ol><li><strong>物質を置く</strong><span>物質を選び、盤面をドラッグ。水・油・水銀の密度差を試してみましょう。</span></li><li><strong>機械を組む</strong><span>モーターと可動壁を置き、接続ツール（0）で子→親の順にクリック。関節は固定・自由・ばね復帰から選び、支点をドラッグで調整します。</span></li><li><strong>動かして観察</strong><span>Space で再生・停止。停止中も移動・設定ができます。加熱・冷却と温度表示で相変化を観察。</span></li></ol><div className="shortcut-list"><span><kbd>V</kbd>選択・移動</span><span><kbd>1–0</kbd>ツール切替</span><span><kbd>Space</kbd>再生 / 停止</span><span><kbd>[ ]</kbd>ブラシ半径</span><span><kbd>Ctrl / ⌘ Z</kbd>Undo</span><span><kbd>Delete</kbd>選択を削除</span></div><p className="small-note">ウィンドウはタイトルバーをドラッグして移動、− で折りたたみ。保存はこのブラウザ内のみ。科学計算用の CFD ではなく、挙動を楽しむセルモデルです。</p><button className="full-button accent" onClick={()=>setHelp(false)}>実験をはじめる <Play size={14}/></button></section></div>}
+    {help&&<div className="modal-backdrop" onClick={()=>setHelp(false)}><section className="help-modal" aria-modal="true" role="dialog" aria-label="操作ガイド" onClick={e=>e.stopPropagation()}><button className="modal-close icon-button" aria-label="ガイドを閉じる" onClick={()=>setHelp(false)}><X size={19}/></button><FlaskConical size={30}/><h2>小さなセルから、実験を。</h2><p>物質を置いて、機械で動かして、その変化を観察する。</p><div className="reaction-card"><strong>{REACTIONS[0].name}</strong><p>{REACTIONS[0].ratio} · {REACTIONS[0].temperature}</p><p>晶塩は水に溶け、冷却で析出。揮発溶媒は65°Cから蒸発。抽出液は水と分離し、晶塩の回収に使えます。</p></div><ol><li><strong>物質を置く</strong><span>物質を選び、盤面をドラッグ。水・油・水銀の密度差を試してみましょう。</span></li><li><strong>機械を組む</strong><span>モーターと可動壁を置き、接続ツール（0）で子→親の順にクリック。関節は固定・自由・ばね復帰から選び、支点をドラッグで調整します。</span></li><li><strong>動かして観察</strong><span>Space で再生・停止。停止中も移動・設定ができます。加熱・冷却と温度表示で相変化を観察。</span></li></ol><div className="shortcut-list"><span><kbd>V</kbd>選択・移動</span><span><kbd>1–0</kbd>ツール切替</span><span><kbd>Space</kbd>再生 / 停止</span><span><kbd>[ ]</kbd>ブラシ半径</span><span><kbd>ホイール</kbd>拡大・縮小</span><span><kbd>Alt＋ドラッグ</kbd>表示移動</span><span><kbd>Ctrl / ⌘ Z</kbd>Undo</span><span><kbd>Delete</kbd>選択を削除</span></div><p className="small-note">ウィンドウはタイトルバーをドラッグして移動、− で折りたたみ。保存はこのブラウザ内のみ。科学計算用の CFD ではなく、挙動を楽しむセルモデルです。</p><button className="full-button accent" onClick={()=>setHelp(false)}>実験をはじめる <Play size={14}/></button></section></div>}
   </main>;
 }
 function NodeIcon({node}:{node:LabNode}) {const Icon=node.kind==='processor'?FlaskConical:node.kind==='motor'?Cog:node.kind==='pump'?ScanLine:node.kind==='valve'?SlidersHorizontal:node.kind==='membrane'?Layers:node.kind==='thermostat'?Thermometer:node.kind==='pin'?MapPin:node.kind==='rect'?Square:Circle;return <Icon size={13} className={`node-icon ${node.kind}`}/>;}

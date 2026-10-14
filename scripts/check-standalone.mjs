@@ -20,6 +20,10 @@ try {
   await page.goto(url);
   await expect.poll(()=>page.workers().length).toBeGreaterThan(0);
   await expect(page.getByRole('heading', { name: 'セル流体実験台 FLUID LAB' })).toBeVisible();
+  await page.getByRole('button',{name:'キャンバスを拡大',exact:true}).click();
+  await expect(page.getByLabel('キャンバス倍率')).toHaveText('125%');
+  await page.getByRole('button',{name:'キャンバス表示をリセット',exact:true}).click();
+  await expect(page.getByLabel('キャンバス倍率')).toHaveText('100%');
   await expect(page.locator('.status-right')).toContainText(/0\.[1-9] s|[1-9]\d*\.\d s/);
   await page.getByRole('button', { name: '停止 Space', exact: true }).click();
   await expect(page.getByText('編集モード · 停止中')).toBeVisible();

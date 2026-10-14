@@ -55,7 +55,7 @@ describe('process devices and persistence',()=>{
     const m=e.add('motor',50.5,100.5)!;m.mode='piston';m.strokeAngle=0;m.amp=10;m.speed=10;const body=e.add('rect',50.5,100,1,18)!;e.reparent(body.id,m.id);const before=e.totalMass(),trapped=e.trapped.length;e.step();expect(m.blocked).toBe(true);expect(m.t).toBe(0);expect(e.totalMass()).toBeCloseTo(before,5);expect(e.trapped.length).toBe(trapped);
   });
   it('loads v4, roundtrips v5 and resolves reordered stable material IDs',()=>{
-    const e=setup();e.demo();const legacy:any=e.snapshot();legacy.version=4;delete legacy.materialIds;delete legacy.chemistry;legacy.viscosity=legacy.viscosity.slice(0,11);legacy.conductivity=legacy.conductivity.slice(0,11);const f=setup();expect(f.load(JSON.stringify(legacy))).toBe(true);expect(f.totalMass()).toBe(e.totalMass());
+    const e=setup();e.physicsDemo();const legacy:any=e.snapshot();legacy.version=4;delete legacy.materialIds;delete legacy.chemistry;legacy.viscosity=legacy.viscosity.slice(0,11);legacy.conductivity=legacy.conductivity.slice(0,11);const f=setup();expect(f.load(JSON.stringify(legacy))).toBe(true);expect(f.totalMass()).toBe(e.totalMass());
     put(f,200,100,[{material:1,amount:.6},{material:11,amount:.2},{material:15,amount:.2}],65);f.add('membrane',220,120);const saved=f.snapshot();const loaded=setup();expect(loaded.load(JSON.stringify(saved))).toBe(true);expect(loaded.snapshot()).toEqual(saved);
     const reordered=structuredClone(saved);const ids=[...MATERIAL_IDS];[ids[1],ids[12]]=[ids[12],ids[1]];reordered.materialIds=ids;const map=(m:number)=>m===1?12:m===12?1:m;reordered.cells=reordered.cells.map(map);reordered.chemistry!.secondary=reordered.chemistry!.secondary.map(map);reordered.chemistry!.tertiary=reordered.chemistry!.tertiary.map(map);reordered.viscosity=[...saved.viscosity];reordered.conductivity=[...saved.conductivity];[reordered.viscosity[1],reordered.viscosity[12]]=[reordered.viscosity[12],reordered.viscosity[1]];[reordered.conductivity[1],reordered.conductivity[12]]=[reordered.conductivity[12],reordered.conductivity[1]];for(const n of reordered.nodes)if(n.filterMaterial)n.filterMaterial=map(n.filterMaterial);expect(loaded.load(JSON.stringify(reordered))).toBe(true);expect(loaded.snapshot()).toEqual(saved);
   });
@@ -63,7 +63,7 @@ describe('process devices and persistence',()=>{
     const e=setup();put(e,100,100,[{material:1,amount:.8},{material:11,amount:.2}]);const saved=e.snapshot(),before=e.snapshot();const bad=structuredClone(saved);bad.chemistry!.amount[e.index(100,100)]=1;expect(e.load(JSON.stringify(bad))).toBe(false);expect(e.snapshot()).toEqual(before);const unknown=structuredClone(saved);unknown.materialIds![1]='unknown';expect(e.load(JSON.stringify(unknown))).toBe(false);expect(e.snapshot()).toEqual(before);
   });
   it.each(['dissolve','distill','reaction'])('experiment %s is populated and conserves material',kind=>{
-    const e=setup();e.experiment(kind);const before=e.totalMass();expect(e.experimentTitle).not.toBe('');expect(e.nodes.length).toBeGreaterThan(0);for(let n=0;n<30;n++)e.step();expect(e.totalMass()).toBeCloseTo(before,2);expect(Array.from(e.temperature).every(Number.isFinite)).toBe(true);expect(e.snapshot().version).toBe(5);
+    const e=setup();e.experiment(kind);const before=e.totalMass();expect(e.experimentTitle).not.toBe('');expect(e.nodes.length).toBeGreaterThan(0);for(let n=0;n<30;n++)e.step();expect(e.totalMass()).toBeCloseTo(before,2);expect(Array.from(e.temperature).every(Number.isFinite)).toBe(true);expect(e.snapshot().version).toBe(6);
   });
 });
 

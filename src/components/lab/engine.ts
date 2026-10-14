@@ -26,7 +26,8 @@ export const MATERIALS: Material[] = [
 ].map((m,i)=>({...m,id:MATERIAL_IDS[i]} as Material));
 export type NodeKind = 'motor' | 'pin' | 'rect' | 'circle' | 'thermostat' | 'pump' | 'valve' | 'membrane';
 export interface LabNode {
-  id: number; kind: NodeKind; name: string; parent: number | null; joint: 'fixed' | 'free';
+  id: number; kind: NodeKind; name: string; parent: number | null; joint: 'fixed' | 'free' | 'spring';
+  anchorX?:number; anchorY?:number; jointOffset?:number; jointVelocity?:number; jointLimit?:number; stiffness?:number; damping?:number; jointContact?:boolean;
   lx: number; ly: number; la: number; width: number; height: number; radius: number;
   mode: 'rotation' | 'piston'; direction: number; speed: number; amp: number; strokeAngle: number;
   t: number; bounce: number; repeat: boolean; blocked: boolean;
@@ -36,7 +37,7 @@ export interface LabNode {
 export interface Pose { x: number; y: number; a: number; ax: number; ay: number }
 export interface Trapped { x: number; y: number; material: number; temperature: number; dx?: number; dy?: number; components?: Component[] }
 export interface Snapshot {
-  version: 4 | 5; materialIds?: string[]; chemistry?: ChemistrySnapshot; experimentTitle?: string; experimentDescription?: string; width: number; height: number; cells: number[]; temperature: number[]; terrain: number[];
+  version: 4 | 5 | 6; materialIds?: string[]; chemistry?: ChemistrySnapshot; experimentTitle?: string; experimentDescription?: string; width: number; height: number; cells: number[]; temperature: number[]; terrain: number[];
   nodes: LabNode[]; nextId: number; viscosity: number[]; conductivity: number[]; trapped: Trapped[];
 }
 export const NODE_NAMES: Record<NodeKind,string> = {motor:'モーター',pin:'ピン',rect:'可動壁 · 矩形',circle:'可動壁 · 円',thermostat:'温度調整装置',pump:'ポンプ',valve:'バルブ',membrane:'選択膜'};
@@ -70,7 +71,7 @@ export class Engine {
   private randomState = 123456789;
   random() { let x=this.randomState; x^=x<<13; x^=x>>>17; x^=x<<5; this.randomState=x; return (x>>>0)/4294967296; }
   index(x: number,y: number) { return x>=0 && x<W && y>=0 && y<H ? Math.floor(y)*W+Math.floor(x) : -1; }
-  snapshot(): Snapshot { return {version:5,materialIds:[...MATERIAL_IDS],chemistry:this.chemistry.snapshot(),experimentTitle:this.experimentTitle,experimentDescription:this.experimentDescription,width:W,height:H,cells:Array.from(this.cells),temperature:Array.from(this.temperature),terrain:Array.from(this.terrain),nodes:structuredClone(this.nodes),nextId:this.nextId,viscosity:[...this.viscosity],conductivity:[...this.conductivity],trapped:structuredClone(this.trapped)}; }
+  snapshot(): Snapshot { return {version:6,materialIds:[...MATERIAL_IDS],chemistry:this.chemistry.snapshot(),experimentTitle:this.experimentTitle,experimentDescription:this.experimentDescription,width:W,height:H,cells:Array.from(this.cells),temperature:Array.from(this.temperature),terrain:Array.from(this.terrain),nodes:structuredClone(this.nodes),nextId:this.nextId,viscosity:[...this.viscosity],conductivity:[...this.conductivity],trapped:structuredClone(this.trapped)}; }
   restore(s: Snapshot) {this.experimentTitle=s.experimentTitle??'';this.experimentDescription=s.experimentDescription??''; this.cells.set(s.cells); this.chemistry.restore(s.chemistry); this.temperature.set(s.temperature); this.terrain.set(s.terrain); this.nodes=structuredClone(s.nodes); this.nextId=s.nextId; this.viscosity=[...s.viscosity]; this.conductivity=[...s.conductivity]; this.trapped=structuredClone(s.trapped); this.rasterize(); this.revision++; }
   checkpoint() { this.history.push(this.snapshot()); if(this.history.length>40) this.history.shift(); }
   undo() { const s=this.history.pop(); if(s) this.restore(s); return !!s; }
@@ -78,11 +79,11 @@ export class Engine {
   load(raw: string): boolean {
     try {
       const s=JSON.parse(raw);
-      if(![4,5].includes(s.version) || s.width!==W || s.height!==H) return false;
+      if(![4,5,6].includes(s.version) || s.width!==W || s.height!==H) return false;
       for(const key of ['experimentTitle','experimentDescription'])if(s[key]!==undefined&&(typeof s[key]!=='string'||s[key].length>300))return false;
       const remap=(m:number)=>s.version===4?(Number.isInteger(m)&&m>=0&&m<11?m:-1):MATERIAL_IDS.indexOf(s.materialIds?.[m]);
-      if(s.version===5&&(!Array.isArray(s.materialIds)||(s.materialIds.length<1||s.materialIds.length>MATERIALS.length||s.materialIds[0]!=='air')||new Set(s.materialIds).size!==s.materialIds.length||s.materialIds.some((id:string)=>!MATERIAL_IDS.includes(id))))return false;
-      if(s.version===5){
+      if(s.version>=5&&(!Array.isArray(s.materialIds)||(s.materialIds.length<1||s.materialIds.length>MATERIALS.length||s.materialIds[0]!=='air')||new Set(s.materialIds).size!==s.materialIds.length||s.materialIds.some((id:string)=>!MATERIAL_IDS.includes(id))))return false;
+      if(s.version>=5){
         const c=s.chemistry;if(!c)return false;
         for(const key of ['amount','secondary','secondaryAmount','tertiary','tertiaryAmount'])if(!Array.isArray(c[key])||c[key].length!==SIZE)return false;
         for(let i=0;i<SIZE;i++){
@@ -99,13 +100,14 @@ export class Engine {
       if(!Array.isArray(s.nodes)||s.nodes.length>1000 || !finite(s.nextId)) return false;
       const ids=new Set<number>();
       for(const n of s.nodes) {
-        if(!Number.isSafeInteger(n.id)||n.id<1||ids.has(n.id)||!['motor','pin','rect','circle','thermostat','pump','valve','membrane'].includes(n.kind)||!['fixed','free'].includes(n.joint)||typeof n.name!=='string'||n.name.length>100) return false;
+        if(!Number.isSafeInteger(n.id)||n.id<1||ids.has(n.id)||!['motor','pin','rect','circle','thermostat','pump','valve','membrane'].includes(n.kind)||!['fixed','free','spring'].includes(n.joint)||typeof n.name!=='string'||n.name.length>100) return false;
         if(n.kind==='thermostat'&&(!finite(n.targetTemperature)||n.targetTemperature< -273||n.targetTemperature>2000||!finite(n.effectRadius)||n.effectRadius<1||n.effectRadius>40||typeof n.enabled!=='boolean'))return false;
         if(['pump','valve','membrane'].includes(n.kind)){
           if(!finite(n.flowRate)||n.flowRate<0||n.flowRate>10||!finite(n.portAngle)||n.portAngle<0||n.portAngle>360||!finite(n.portDistance)||n.portDistance<2||n.portDistance>30||!Number.isInteger(n.filterMaterial)||remap(n.filterMaterial)<0||typeof n.enabled!=='boolean')return false;
           if(n.transported!==undefined&&(!finite(n.transported)||n.transported<0)||n.deviceStatus!==undefined&&(typeof n.deviceStatus!=='string'||n.deviceStatus.length>100))return false;
           n.filterMaterial=remap(n.filterMaterial);
         }
+        for(const [key,min,max] of [['anchorX',-2000,2000],['anchorY',-2000,2000],['jointOffset',-Math.PI,Math.PI],['jointVelocity',-100,100],['jointLimit',0,Math.PI],['stiffness',0,80],['damping',0,30]] as const)if(n[key]!==undefined&&(!finite(n[key])||n[key]<min||n[key]>max))return false;
         ids.add(n.id);
         for(const k of ['lx','ly','la','width','height','radius','speed','amp','strokeAngle','t','direction','bounce']) if(!finite(n[k])) return false;
         if(Math.abs(n.lx)>2000||Math.abs(n.ly)>2000||n.width<1||n.width>W||n.height<1||n.height>H||n.radius<.5||n.radius>300||n.speed<0||n.speed>10||n.amp<0||n.amp>240||n.t<0||n.t>1||![-1,0,1].includes(n.direction)||![-1,1].includes(n.bounce)||!['rotation','piston'].includes(n.mode)||typeof n.repeat!=='boolean') return false;
@@ -126,6 +128,14 @@ export class Engine {
         if(p.components){if(!Array.isArray(p.components)||p.components.length>3||!p.components.every((c:Component)=>Number.isInteger(c.material)&&remap(c.material)>0&&finite(c.amount)&&c.amount>0&&c.amount<=1)||p.components.reduce((sum:number,c:Component)=>sum+c.amount,0)>1.00001)return false;p.components=p.components.map((c:Component)=>({...c,material:remap(c.material)}));}
       }
       if(!Number.isSafeInteger(s.nextId)||s.nextId<=Math.max(0,...ids)) return false;
+      if(s.version<6 || s.nodes.some((n:LabNode)=>n.kind==='pin')){
+        const legacy=new Engine();legacy.nodes=structuredClone(s.nodes);const old=legacy.poses();
+        for(const n of s.nodes as LabNode[]){if(n.kind==='pin')continue;const pose=old.get(n.id)!;let pivot=pose;let parent=n.parent;
+          while(parent!==null&&map.get(parent)?.kind==='pin'){pivot=old.get(parent)!;if(map.get(parent)!.joint==='free')n.joint='free';parent=map.get(parent)!.parent;}
+          n.parent=parent;n.anchorX=Math.cos(pose.a)*(pivot.x-pose.x)+Math.sin(pose.a)*(pivot.y-pose.y);n.anchorY=-Math.sin(pose.a)*(pivot.x-pose.x)+Math.cos(pose.a)*(pivot.y-pose.y);
+          legacy.setWorld(n,pose.x,pose.y,pose.a,old);
+        }s.nodes=s.nodes.filter((n:LabNode)=>n.kind!=='pin');
+      }
       this.restore(s); this.history=[]; return true;
     } catch { return false; }
   }
@@ -136,8 +146,9 @@ export class Engine {
       const parent=n.parent===null?undefined:map.get(n.parent);
       const p=parent?visit(parent):{x:0,y:0,a:0,ax:0,ay:0};
       const c=Math.cos(p.a),s=Math.sin(p.a);
-      const x=p.ax+c*n.lx-s*n.ly, y=p.ay+s*n.lx+c*n.ly;
-      const a=n.joint==='free'?n.la:p.a+n.la;
+      const jx=p.ax+c*n.lx-s*n.ly, jy=p.ay+s*n.lx+c*n.ly;
+      const a=n.joint==='free'?n.la:p.a+n.la+(n.joint==='spring'?(n.jointOffset??0):0);
+      const x=jx-Math.cos(a)*(n.anchorX??0)+Math.sin(a)*(n.anchorY??0),y=jy-Math.sin(a)*(n.anchorX??0)-Math.cos(a)*(n.anchorY??0);
       const stroke=a+n.strokeAngle;
       const piston=n.kind==='motor'&&n.mode==='piston';
       const pose={x,y,a,ax:x+(piston?Math.cos(stroke)*n.amp*n.t:0),ay:y+(piston?Math.sin(stroke)*n.amp*n.t:0)};
@@ -148,14 +159,34 @@ export class Engine {
   setWorld(n: LabNode,x: number,y: number,a: number, poses=this.poses()) {
     const p=n.parent===null?undefined:poses.get(n.parent);
     const px=p?.ax??0,py=p?.ay??0,pa=p?.a??0,c=Math.cos(pa),s=Math.sin(pa);
-    n.lx=c*(x-px)+s*(y-py); n.ly=-s*(x-px)+c*(y-py); n.la=n.joint==='free'?a:a-pa;
+    x+=Math.cos(a)*(n.anchorX??0)-Math.sin(a)*(n.anchorY??0);y+=Math.sin(a)*(n.anchorX??0)+Math.cos(a)*(n.anchorY??0);
+    n.lx=c*(x-px)+s*(y-py); n.ly=-s*(x-px)+c*(y-py); n.la=n.joint==='free'?a:a-pa-(n.jointOffset??0)*(n.joint==='spring'?1:0);
   }
   isDescendant(id:number,ancestor:number) { let n=this.nodes.find(n=>n.id===id); while(n) { if(n.id===ancestor) return true; n=this.nodes.find(p=>p.id===n!.parent); } return false; }
   reparent(id: number,parent: number|null) {
     const n=this.nodes.find(n=>n.id===id); if(!n||parent!==null&&(!this.nodes.some(n=>n.id===parent)||this.isDescendant(parent,id))) return false;
-    const poses=this.poses(),p=poses.get(id)!; n.parent=parent; this.setWorld(n,p.x,p.y,p.a,poses); this.revision++; return true;
+    const poses=this.poses(),p=poses.get(id)!; n.parent=parent; this.setWorld(n,p.x,p.y,p.a,poses);
+    if(parent!==null){const target=poses.get(parent)!,body=this.nodes.find(c=>c.id===parent)!;let x=target.ax,y=target.ay;
+      if(body.kind==='rect'){const dx=p.x-target.x,dy=p.y-target.y,c=Math.cos(target.a),s=Math.sin(target.a),u=clamp(c*dx+s*dy,-body.width/2,body.width/2),v=clamp(-s*dx+c*dy,-body.height/2,body.height/2);x=target.x+c*u-s*v;y=target.y+s*u+c*v;}
+      if(body.kind==='circle'){const d=Math.hypot(p.x-target.x,p.y-target.y),r=Math.min(d,body.radius);if(d){x=target.x+(p.x-target.x)*r/d;y=target.y+(p.y-target.y)*r/d;}}
+      this.setJointAnchor(id,x,y);
+    }this.revision++; return true;
   }
-  setJoint(id:number,joint:'fixed'|'free') { const n=this.nodes.find(n=>n.id===id); if(!n)return; const poses=this.poses(),p=poses.get(id)!; n.joint=joint; this.setWorld(n,p.x,p.y,p.a,poses); this.revision++; }
+  setJoint(id:number,joint:'fixed'|'free'|'spring') { const n=this.nodes.find(n=>n.id===id); if(!n)return; const poses=this.poses(),p=poses.get(id)!; n.joint=joint;n.jointOffset=0;n.jointVelocity=0; this.setWorld(n,p.x,p.y,p.a,poses); this.revision++; }
+  jointPoint(id:number,poses=this.poses()){const n=this.nodes.find(n=>n.id===id)!,p=poses.get(id)!;return {x:p.x+Math.cos(p.a)*(n.anchorX??0)-Math.sin(p.a)*(n.anchorY??0),y:p.y+Math.sin(p.a)*(n.anchorX??0)+Math.cos(p.a)*(n.anchorY??0)};}
+  setJointAnchor(id:number,x:number,y:number){const n=this.nodes.find(n=>n.id===id);if(!n)return;const poses=this.poses(),p=poses.get(id)!;n.anchorX=Math.cos(p.a)*(x-p.x)+Math.sin(p.a)*(y-p.y);n.anchorY=-Math.sin(p.a)*(x-p.x)+Math.cos(p.a)*(y-p.y);this.setWorld(n,p.x,p.y,p.a,poses);this.revision++;}
+  private guideScore(nodes:LabNode[]){let score=0;const poses=this.poses();for(const n of nodes)if(n.kind==='rect'||n.kind==='circle')this.shapeCells(n,poses.get(n.id)!,i=>{if(this.terrain[i]===2)score++;});return score;}
+  private guideCollision(nodes:LabNode[]){const poses=this.poses();return nodes.some(n=>{if(n.kind!=='rect'&&n.kind!=='circle')return false;const p=poses.get(n.id)!;const c=Math.abs(Math.cos(p.a)),s=Math.abs(Math.sin(p.a)),rx=n.kind==='circle'?n.radius:(c*n.width+s*n.height)/2,ry=n.kind==='circle'?n.radius:(s*n.width+c*n.height)/2;let hit=p.x-rx<0||p.x+rx>W||p.y-ry<0||p.y+ry>H;this.shapeCells(n,p,i=>{if(this.terrain[i]===2)hit=true;});return hit;});}
+  private relaxJoints(dt:number){for(const n of this.nodes){n.jointContact=false;if(n.joint!=='spring')continue;const old=n.jointOffset??0,v=(n.jointVelocity??0)+(-(n.stiffness??18)*old-(n.damping??8)*(n.jointVelocity??0))*dt,target=clamp(old+v*dt,-(n.jointLimit??Math.PI/2),n.jointLimit??Math.PI/2),children=this.nodes.filter(c=>this.isDescendant(c.id,n.id));const steps=Math.max(1,Math.ceil(Math.abs(target-old)*400));let safe=old;for(let i=1;i<=steps;i++){n.jointOffset=old+(target-old)*i/steps;if(this.guideCollision(children)){n.jointOffset=safe;n.jointContact=true;break;}safe=n.jointOffset;}n.jointVelocity=n.jointContact?0:v;}}
+  private bendAtGuides(nodes:LabNode[]){
+    for(let pass=0;pass<nodes.length;pass++){if(!this.guideCollision(nodes))return true;let resolved=false;
+      for(const n of [...nodes].reverse().filter(n=>n.joint!=='fixed'&&n.kind!=='motor')){const children=nodes.filter(c=>this.isDescendant(c.id,n.id));if(!this.guideCollision(children))continue;const key=n.joint==='free'?'la':'jointOffset',old=n[key]??0,limit=n.jointLimit??Math.PI/2;let found=false;
+        const initial=this.guideScore(children),blocked=new Set<number>();
+        for(let i=1;i<=80&&!found;i++)for(const sign of [1,-1]){if(blocked.has(sign))continue;const value=old+sign*i*.005;if(n.joint==='spring'&&Math.abs(value)>limit)continue;n[key]=value;if(this.guideScore(children)>initial+1){blocked.add(sign);continue;}if(!this.guideCollision(children)){found=true;break;}}
+        if(!found)n[key]=old;else{n.jointContact=true;n.jointVelocity=0;resolved=true;break;}
+      }if(!resolved)return false;
+    }return !this.guideCollision(nodes);
+  }
   detach(id:number) { for(const n of this.nodes.filter(n=>n.parent===id)) this.reparent(n.id,null); this.rasterize(); }
   connect(id:number) {
     const pin=this.nodes.find(n=>n.id===id&&n.kind==='pin'); if(!pin)return false;
@@ -297,7 +328,7 @@ export class Engine {
   private drive(dt:number) {
     for(const n of this.nodes.filter(n=>n.kind==='motor')) {
       n.blocked=false;if(!n.direction||!n.speed)continue;
-      const start={la:n.la,t:n.t,bounce:n.bounce,direction:n.direction};
+      const flex=descendantState(this.nodes);const start={la:n.la,t:n.t,bounce:n.bounce,direction:n.direction};
       // Each step sweeps every descendant with <= 0.75 cell travel; thin guides cannot be skipped.
       const descendants=this.nodes.filter(c=>this.isDescendant(c.id,n.id));
       const poses=this.poses(),origin=poses.get(n.id)!;
@@ -305,29 +336,22 @@ export class Engine {
       const distance=n.mode==='rotation'?n.speed*dt*extent:n.speed*dt*Math.max(1,n.amp)*.5;
       const substeps=Math.max(1,Math.ceil(distance/.75));
       let collision=false;
-      const trajectory:{la:number;t:number;bounce:number;direction:number}[]=[];
+      const trajectory:{motor:{la:number;t:number;bounce:number;direction:number};flex:ReturnType<typeof descendantState>}[]=[];
       for(let step=0;step<substeps;step++) {
         if(n.mode==='rotation')n.la+=n.direction*n.speed*dt/substeps;
         else {
           n.t+=n.direction*(n.repeat?n.bounce:1)*n.speed*dt*.5/substeps;
           if(n.t>1||n.t<0) {if(n.repeat){n.t=clamp(n.t<0?-n.t:2-n.t,0,1);n.bounce*=-1;}else{n.t=clamp(n.t,0,1);n.direction=0;}}
         }
-        const next=this.poses();
-        for(const child of descendants.filter(c=>c.kind==='rect'||c.kind==='circle')) {
-          const p=next.get(child.id)!;
-          const c=Math.abs(Math.cos(p.a)),s=Math.abs(Math.sin(p.a));const rx=child.kind==='circle'?child.radius:(c*child.width+s*child.height)/2,ry=child.kind==='circle'?child.radius:(s*child.width+c*child.height)/2;
-          if(p.x-rx<0||p.x+rx>W||p.y-ry<0||p.y+ry>H)collision=true;
-          this.shapeCells(child,p,(i)=>{if(this.terrain[i]===2)collision=true;});
-          if(collision)break;
-        }
+        collision=!this.bendAtGuides(descendants);
         if(collision)break;
-        trajectory.push({la:n.la,t:n.t,bounce:n.bounce,direction:n.direction});
+        trajectory.push({motor:{la:n.la,t:n.t,bounce:n.bounce,direction:n.direction},flex:descendantState(this.nodes)});
       }
       if(!collision&&!this.canDisplace(poses))collision=true;
-      if(collision){Object.assign(n,start);n.blocked=true;}
+      if(collision){Object.assign(n,start);restoreJoints(this.nodes,flex);n.blocked=true;}
       else if(substeps>1){
-        Object.assign(n,start);
-        for(const state of trajectory){const before=this.poses();Object.assign(n,state);this.rasterize(before);}
+        Object.assign(n,start);restoreJoints(this.nodes,flex);
+        for(const state of trajectory){const before=this.poses();Object.assign(n,state.motor);restoreJoints(this.nodes,state.flex);this.rasterize(before);}
       }
     }
   }
@@ -443,7 +467,7 @@ export class Engine {
       }
     }
   }
-  step(dt=DT) {const old=this.poses();this.drive(dt);this.rasterize(old);this.runDevices(dt);this.thermal();this.chemistry.step();this.flow();this.flow();this.tick++;}
+  step(dt=DT) {const old=this.poses();this.relaxJoints(dt);this.drive(dt);this.rasterize(old);this.runDevices(dt);this.thermal();this.chemistry.step();this.flow();this.flow();this.tick++;}
   totalMass(){let mass=this.trapped.reduce((s,p)=>s+(p.components?.reduce((t,c)=>t+c.amount,0)??1),0);for(let i=0;i<SIZE;i++)mass+=this.chemistry.mass(i);return mass;}
   count() {let count=this.trapped.length;for(let i=0;i<SIZE;i++)if(this.cells[i])count++;return count;}
   experiment(kind:string){
@@ -476,7 +500,21 @@ export class Engine {
     }
     this.rasterize();this.tick=0;this.revision++;
   }
-  demo() {
+  jointDemo(clear=true){
+    if(clear)this.clear();
+    for(const [x,joint] of [[120,'spring'],[250,'free']] as const){const motor=this.add('motor',x,72)!;motor.name=x===120?'01 · 攪拌モーター':'02 · 自由関節モーター';motor.speed=.65;
+      const arm=this.add('rect',x+9,72,18,3)!;arm.name='固定アーム';this.reparent(arm.id,motor.id);
+      const flap=this.add('rect',x+27,72,18,3)!;flap.name=joint==='spring'?'ばね復帰パドル':'自由パドル';this.reparent(flap.id,arm.id);this.setJoint(flap.id,joint);flap.jointLimit=Math.PI/2;motor.la=-.8;if(joint==='free')flap.la=-.8;
+      this.terrainShape(x+32,70,x+33,74,2);
+    }this.experimentTitle='関節比較 · 左はばね復帰、右は自由';this.experimentDescription='パドルが緑のガイドで曲がります。左は離れると元の角度へ、右は曲がった角度を保ちます。選択して支点やばねを調整できます。';this.rasterize();
+  }
+  demo(){this.experiment('reaction');this.jointDemo(false);
+    const mixer=this.add('motor',132,162)!;mixer.name='03 · 合成槽の攪拌';mixer.speed=.35;
+    const arm=this.add('rect',141,162,18,3)!;arm.name='合成槽の固定アーム';this.reparent(arm.id,mixer.id);
+    const paddle=this.add('rect',159,162,18,3)!;paddle.name='合成槽のばねパドル';this.reparent(paddle.id,arm.id);this.setJoint(paddle.id,'spring');mixer.la=-.8;this.terrainShape(164,160,165,164,2);
+    const heat=this.add('thermostat',109,172)!;heat.name='合成槽の温度調整';heat.targetTemperature=55;heat.effectRadius=28;
+    this.rasterize();this.experimentTitle='合成・分離 × 関節実験';this.experimentDescription='上段：固定アームと自由／ばね関節を比較。下段：ばねパドルと温度装置で攪拌・保温し、水中のAとDから沈殿Eを合成。選択膜で右へ回収。見本メニューには蒸留・析出・従来の物理もあります。';}
+  physicsDemo() {
     this.clear();
     const wall=(a:number,b:number,c:number,d:number)=>this.terrainShape(a,b,c,d,1);
     const fill=(x0:number,y0:number,x1:number,y1:number,m:number)=>{for(let y=y0;y<y1;y++)for(let x=x0;x<x1;x++){const i=this.index(x,y);if(i>=0&&!this.terrain[i]){this.cells[i]=m;this.temperature[i]=MATERIALS[m].temperature;}}};
@@ -488,12 +526,13 @@ export class Engine {
     fill(215,99,235,112,7);fill(250,103,271,113,8);
     wall(191,51,191,88);wall(233,51,233,88);wall(191,51,233,52);wall(191,87,233,89);fill(198,73,227,85,9);
     const motor=this.add('motor',135,176)!;motor.name='01 · 攪拌モーター';motor.speed=.6;
-    const pin=this.add('pin',135,176)!;pin.name='パドル接続';
-    const paddle=this.add('rect',135,176,44,4)!;paddle.name='攪拌パドル';this.reparent(paddle.id,pin.id);
+    const paddle=this.add('rect',135,176,44,4)!;paddle.name='攪拌パドル';this.reparent(paddle.id,motor.id);
     const piston=this.add('motor',273,153)!;piston.name='02 · 反復ピストン';piston.mode='piston';piston.amp=42;piston.speed=.65;piston.strokeAngle=Math.PI;piston.t=.1;
     const tip=this.poses().get(piston.id)!;
-    const pp=this.add('pin',tip.ax,tip.ay)!;pp.name='先端のピン';this.reparent(pp.id,piston.id);
-    const plate=this.add('rect',tip.ax,tip.ay,3,27)!;plate.name='押板';this.reparent(plate.id,pp.id);
+    const plate=this.add('rect',tip.ax,tip.ay,3,27)!;plate.name='押板';this.reparent(plate.id,piston.id);
     this.terrainShape(223,135,225,165,2);this.rasterize();this.tick=0;this.revision++;
   }
 }
+
+function descendantState(nodes:LabNode[]){return nodes.map(n=>({id:n.id,la:n.la,jointOffset:n.jointOffset,jointVelocity:n.jointVelocity}));}
+function restoreJoints(nodes:LabNode[],states:ReturnType<typeof descendantState>){for(const state of states){const n=nodes.find(n=>n.id===state.id);if(n){n.la=state.la;n.jointOffset=state.jointOffset;n.jointVelocity=state.jointVelocity;}}}

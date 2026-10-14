@@ -35,7 +35,7 @@ export class Renderer {
     if(opts.grid) {ctx.strokeStyle='rgba(102,139,161,.09)';ctx.lineWidth=.25;ctx.beginPath();for(let x=0;x<=W;x+=20){ctx.moveTo(x,0);ctx.lineTo(x,H);}for(let y=0;y<=H;y+=20){ctx.moveTo(0,y);ctx.lineTo(W,y);}ctx.stroke();}
     const poses=engine.poses();
     if(opts.connections)for(const n of engine.nodes) if(n.parent!==null) {
-      const p=poses.get(n.id)!,parent=poses.get(n.parent)!;ctx.strokeStyle=n.joint==='fixed'?'#6eb1a680':'#b6a7e099';ctx.lineWidth=.5;ctx.setLineDash([1.5,1.5]);ctx.beginPath();ctx.moveTo(parent.ax,parent.ay);ctx.lineTo(p.x,p.y);ctx.stroke();ctx.setLineDash([]);
+      const p=poses.get(n.id)!,parent=poses.get(n.parent)!;ctx.strokeStyle=n.joint==='fixed'?'#6eb1a680':'#b6a7e099';ctx.lineWidth=.5;ctx.setLineDash([1.5,1.5]);ctx.beginPath();ctx.moveTo(parent.ax,parent.ay);const hinge=engine.jointPoint(n.id,poses);ctx.lineTo(hinge.x,hinge.y);ctx.lineTo(p.x,p.y);ctx.stroke();ctx.setLineDash([]);
     }
     for(const n of engine.nodes.filter(n=>n.kind==='rect'||n.kind==='circle')) {
       const p=poses.get(n.id)!;ctx.save();ctx.translate(p.x,p.y);ctx.rotate(p.a);
@@ -54,6 +54,7 @@ export class Renderer {
       }
       this.motor(ctx,p,color,selected,n.mode==='rotation');
     }
+    for(const n of engine.nodes.filter(n=>n.kind!=='motor'&&n.kind!=='pin'&&(opts.selected.has(n.id)||opts.connections&&n.parent!==null))){const p=engine.jointPoint(n.id,poses);ctx.fillStyle=n.jointContact?'#ffbc74':n.joint==='spring'?'#ffd878':n.joint==='free'?'#c5a4ff':'#6fe4c0';ctx.strokeStyle='#102b32';ctx.lineWidth=.6;ctx.beginPath();if(n.joint==='fixed')ctx.rect(p.x-1.3,p.y-1.3,2.6,2.6);else ctx.arc(p.x,p.y,1.7,0,Math.PI*2);ctx.fill();ctx.stroke();if(n.joint==='spring'){ctx.beginPath();ctx.arc(p.x,p.y,.7,0,Math.PI*2);ctx.stroke();}}
     for(const n of engine.nodes.filter(n=>n.kind==='pin')) {
       const p=poses.get(n.id)!;ctx.fillStyle=n.joint==='free'?'#beabef':'#6fe4c0';ctx.strokeStyle=opts.selected.has(n.id)?'#fff':'#153a35';ctx.lineWidth=.6;ctx.beginPath();ctx.arc(p.x,p.y,1.5,0,Math.PI*2);ctx.fill();ctx.stroke();
     }
@@ -81,7 +82,7 @@ export class Renderer {
       }
       ctx.restore();
     }
-    if(opts.hints) {
+    if(opts.hints&&!engine.experimentTitle) {
       const label=(x:number,y:number,num:string,title:string,sub:string)=>{ctx.font='2.6px system-ui';ctx.fillStyle='#6fe4c0';ctx.fillText(num,x,y);ctx.fillStyle='#aabecb';ctx.fillText(title,x+7,y);ctx.font='2px system-ui';ctx.fillStyle='#567282';ctx.fillText(sub,x+7,y+4);};
       label(79,84,'01','密度と攪拌','油は浮き、水銀は沈む');label(188,125,'02','熱と相変化','水と溶岩の境界を観察');label(191,42,'03','気体の上昇','水素は上へ');
     }

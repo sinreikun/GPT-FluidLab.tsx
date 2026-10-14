@@ -37,7 +37,7 @@ describe('mechanisms and editing',()=>{
   it('fixed inherits rotation, free preserves angle, descendants inherit their own parent',()=>{
     const e=new Engine(),m=e.add('motor',100,100)!,fixed=e.add('rect',110,100,4,4)!,free=e.add('pin',100,110)!,child=e.add('rect',105,110,4,4)!;
     e.reparent(fixed.id,m.id);e.reparent(free.id,m.id);e.setJoint(free.id,'free');e.reparent(child.id,free.id);
-    m.la=Math.PI/2;const poses=e.poses();expect(poses.get(fixed.id)!.a).toBeCloseTo(Math.PI/2);expect(poses.get(fixed.id)!.y).toBeCloseTo(110);expect(poses.get(free.id)!.a).toBeCloseTo(0);expect(poses.get(free.id)!.x).toBeCloseTo(90);expect(poses.get(child.id)!.x).toBeCloseTo(95);
+    m.la=Math.PI/2;const poses=e.poses();expect(poses.get(fixed.id)!.a).toBeCloseTo(Math.PI/2);expect(poses.get(fixed.id)!.y).toBeCloseTo(110);expect(poses.get(free.id)!.a).toBeCloseTo(0);expect(poses.get(free.id)!.x).toBeCloseTo(100);expect(poses.get(child.id)!.x).toBeCloseTo(105);
     expect(e.reparent(m.id,child.id)).toBe(false);
   });
   it('moves selected roots once and preserves world pose on detach and delete',()=>{
@@ -104,11 +104,11 @@ describe('save validation and demo',()=>{
   it('round trips entire state and rejects corrupt, mismatched and cyclic saves atomically',()=>{
     const e=new Engine();e.demo();const saved=e.snapshot(),restored=new Engine();expect(restored.load(JSON.stringify(saved))).toBe(true);expect(restored.snapshot()).toEqual(saved);
     expect(restored.load('{')).toBe(false);expect(restored.load(JSON.stringify({...saved,version:3}))).toBe(false);expect(restored.load(JSON.stringify({...saved,width:2}))).toBe(false);
-    const cyclic=structuredClone(saved);cyclic.nodes[0].parent=cyclic.nodes[2].id;expect(restored.load(JSON.stringify(cyclic))).toBe(false);
+    const cyclic=structuredClone(saved);cyclic.nodes[0].parent=cyclic.nodes[0].id;expect(restored.load(JSON.stringify(cyclic))).toBe(false);
     const bad=structuredClone(saved);bad.nodes[0].speed=Infinity;expect(restored.load(JSON.stringify(bad))).toBe(false);expect(restored.snapshot()).toEqual(saved);
   });
   it('demo runs with both motors, all educational materials and no lost particles',()=>{
-    const e=new Engine();e.demo();const count=e.totalMass();expect(e.nodes.filter(n=>n.kind==='motor')).toHaveLength(2);expect(e.cells).toContain(9);expect(e.cells).toContain(5);expect(e.cells).toContain(4);
+    const e=new Engine();e.physicsDemo();const count=e.totalMass();expect(e.nodes.filter(n=>n.kind==='motor')).toHaveLength(2);expect(e.cells).toContain(9);expect(e.cells).toContain(5);expect(e.cells).toContain(4);
     for(let i=0;i<90;i++)e.step(DT);expect(e.totalMass()).toBeCloseTo(count,2);expect(e.nodes.find(n=>n.kind==='motor'&&n.mode==='rotation')!.la).toBeGreaterThan(.5);
     for(const n of e.nodes)expect(Number.isFinite(e.poses().get(n.id)!.x)).toBe(true);
     expect(e.cells.length).toBe(W*H);
@@ -162,4 +162,14 @@ describe('material-specific flow',()=>{
     const e=new Engine();e.conductivity.fill(0);e.terrainShape(0,120,W-1,120,1);e.terrainShape(110,50,110,120,1);fill(e,100,105,110,120,3);const count=e.totalMass();for(let i=0;i<70;i++)e.step();
     for(let i=0;i<SIZE;i++)if(e.cells[i]===3)expect(i%W).toBeLessThan(110);expect(e.totalMass()).toBe(count);
   });
+});
+
+describe('automatic joints',()=>{
+  it('moves the pivot without changing world geometry, and preserves pose across modes',()=>{const e=new Engine(),m=e.add('motor',100,100)!,b=e.add('rect',120,100,20,3)!;e.reparent(b.id,m.id);const p=e.poses().get(b.id)!;e.setJointAnchor(b.id,110,100);expect(e.poses().get(b.id)).toEqual(p);for(const mode of ['free','spring','fixed'] as const){e.setJoint(b.id,mode);expect(e.poses().get(b.id)).toEqual(p);}m.la=.5;expect(e.jointPoint(b.id).x).toBeCloseTo(100+10*Math.cos(.5));});
+  it('bends at a guide, then restores only the spring joint after clearance',()=>{const e=new Engine();e.jointDemo();let peak=0;for(let i=0;i<140;i++){e.step();const b=e.nodes.find(n=>n.joint==='spring')!;peak=Math.max(peak,Math.abs(b.jointOffset??0));for(const n of e.nodes.filter(n=>n.kind==='rect'))e.shapeCells(n,e.poses().get(n.id)!,j=>expect(e.terrain[j]).not.toBe(2));}expect(peak).toBeGreaterThan(.05);const spring=e.nodes.find(n=>n.joint==='spring')!,free=e.nodes.find(n=>n.joint==='free')!,angle=free.la;e.terrain.fill(0);for(const m of e.nodes.filter(n=>n.kind==='motor'))m.direction=0;for(let i=0;i<160;i++)e.step();expect(Math.abs(spring.jointOffset??0)).toBeLessThan(.02);expect(free.la).toBe(angle);});
+  it('migrates legacy pin pivots and removes pin rows',()=>{const e=new Engine(),m=e.add('motor',100,100)!,pin=e.add('pin',110,100)!,b=e.add('rect',120,100,8,3)!;e.reparent(pin.id,m.id);e.reparent(b.id,pin.id);const old=e.snapshot();old.version=5;for(const n of old.nodes){delete n.anchorX;delete n.anchorY;}e.nodes=structuredClone(old.nodes);const pose=e.poses().get(b.id)!;const f=new Engine();expect(f.load(JSON.stringify(old))).toBe(true);expect(f.nodes.some(n=>n.kind==='pin')).toBe(false);expect(f.poses().get(b.id)).toEqual(pose);expect(f.nodes.find(n=>n.id===b.id)!.parent).toBe(m.id);});
+});
+
+describe('joint constraints and integrated demo',()=>{
+  it('stops at a guide when the spring angle limit is zero and keeps the integrated chemistry mass',()=>{const e=new Engine();e.demo();const b=e.nodes.find(n=>n.joint==='spring')!;b.jointLimit=0;const m=e.nodes.find(n=>n.name==='01 · 攪拌モーター')!,mass=e.totalMass();let stopped=false;for(let i=0;i<110;i++){e.step();stopped ||= m.blocked;expect(b.jointOffset??0).toBe(0);}expect(stopped).toBe(true);expect(e.totalMass()).toBeCloseTo(mass,2);const save=e.snapshot();const invalid=structuredClone(save);invalid.nodes.find(n=>n.joint==='spring')!.damping=-1;expect(e.load(JSON.stringify(invalid))).toBe(false);expect(e.snapshot()).toEqual(save);});
 });

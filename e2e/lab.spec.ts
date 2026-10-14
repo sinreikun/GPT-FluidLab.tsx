@@ -22,17 +22,16 @@ test('playback, edit while paused, property inputs, save/reload and Undo',async(
   await page.getByRole('button',{name:'盤面を全消去'}).click();await page.getByRole('button',{name:'読込',exact:true}).click();await expect(page.getByRole('button',{name:'試験モーター',exact:true})).toBeVisible();
   expect(errors).toEqual([]);
 });
-test('mechanism construction, connecting pin, multi-select without drag and deletion',async({page})=>{
+test('mechanism construction, automatic joint, multi-select without drag and deletion',async({page})=>{
   await page.goto('/');await page.getByRole('button',{name:'停止 Space',exact:true}).click();await expect(page.getByText('編集モード · 停止中')).toBeVisible();await page.getByRole('button',{name:'盤面を全消去'}).click();
   await page.keyboard.press('9');await clickCell(page,200,100);
   await page.keyboard.press('7');await dragCell(page,195,96,221,105);
-  await page.keyboard.press('0');await clickCell(page,200,100);
-  await page.getByRole('button',{name:'この位置でつなぐ',exact:true}).click();
-  let s=await saveState(page);const pin=s.nodes.find((n:any)=>n.kind==='pin'),body=s.nodes.find((n:any)=>n.kind==='rect'),motor=s.nodes.find((n:any)=>n.kind==='motor');expect(pin.parent).toBe(motor.id);expect(body.parent).toBe(pin.id);
-  await page.getByRole('button',{name:'可動壁 · 矩形',exact:true}).click({modifiers:['Shift']});await expect(page.getByText('2 個のオブジェクトを選択')).toBeVisible();
-  const snapshot=s.nodes.map((n:any)=>[n.lx,n.ly]);s=await saveState(page);expect(s.nodes.map((n:any)=>[n.lx,n.ly])).toEqual(snapshot);
-  await page.keyboard.press('Delete');s=await saveState(page);expect(s.nodes).toHaveLength(1);expect(s.nodes[0].kind).toBe('motor');
-  await page.keyboard.press('Control+z');s=await saveState(page);expect(s.nodes).toHaveLength(3);
+  await page.keyboard.press('0');await clickCell(page,215,100);await clickCell(page,200,100);
+  let s=await saveState(page);const body=s.nodes.find((n:any)=>n.kind==='rect'),motor=s.nodes.find((n:any)=>n.kind==='motor');expect(body.parent).toBe(motor.id);expect(s.nodes).toHaveLength(2);
+  await page.getByRole('button',{name:'ばね復帰',exact:true}).click();s=await saveState(page);expect(s.nodes.find((n:any)=>n.kind==='rect').joint).toBe('spring');
+  await page.getByRole('button',{name:'モーター',exact:true}).click({modifiers:['Shift']});await expect(page.getByText('2 個のオブジェクトを選択')).toBeVisible();
+  await page.keyboard.press('Delete');s=await saveState(page);expect(s.nodes).toHaveLength(0);
+  await page.keyboard.press('Control+z');s=await saveState(page);expect(s.nodes).toHaveLength(2);
 });
 test('right erase, square preview, temperature brushes and corrupted storage recovery',async({page})=>{
   await page.goto('/');await page.getByRole('button',{name:'停止 Space',exact:true}).click();await expect(page.getByText('編集モード · 停止中')).toBeVisible();await page.getByRole('button',{name:'盤面を全消去'}).click();
@@ -80,7 +79,7 @@ test('chemistry experiments expose composition and configurable separation devic
   await page.getByRole('button',{name:'停止 Space',exact:true}).click();
   await page.getByLabel('実験見本').selectOption('reaction');await page.getByRole('button',{name:'見本',exact:true}).click();
   await expect(page.getByText('A + D → 沈殿E → 選択膜で回収',{exact:true})).toBeVisible();
-  let s=await saveState(page);expect(s.version).toBe(5);expect(s.materialIds).toContain('precipitate-e');expect(s.chemistry.secondaryAmount.some((n:number)=>n>0)).toBe(true);
+  let s=await saveState(page);expect(s.version).toBe(6);expect(s.materialIds).toContain('precipitate-e');expect(s.chemistry.secondaryAmount.some((n:number)=>n>0)).toBe(true);
   await page.getByLabel('観察モード').selectOption('component');await page.getByLabel('観察成分').selectOption('11');
   await page.getByRole('button',{name:'E回収用の選択膜',exact:true}).click();
   await page.getByLabel('通過成分').selectOption('1');await page.getByLabel('流量',{exact:true}).fill('3.5');await page.getByLabel('流量',{exact:true}).blur();

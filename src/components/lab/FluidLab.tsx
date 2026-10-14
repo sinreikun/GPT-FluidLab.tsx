@@ -4,19 +4,19 @@ import { Engine, MATERIALS, W, H, DT, STORAGE_KEY, clamp, type LabNode, type Pos
 import { REACTIONS } from './chemistry';
 import { Renderer, type RenderOptions } from './renderer';
 
-type Tool='select'|'fluid'|'erase'|'wallRect'|'wallCircle'|'guideRect'|'guideCircle'|'bodyRect'|'bodyCircle'|'motor'|'pin'|'heat'|'cool'|'thermostat'|'pump'|'valve'|'membrane';
+type Tool='select'|'fluid'|'erase'|'wallRect'|'wallCircle'|'guideRect'|'guideCircle'|'bodyRect'|'bodyCircle'|'motor'|'connect'|'heat'|'cool'|'thermostat'|'pump'|'valve'|'membrane';
 const TOOLS:{id:Tool;name:string;key:string;icon:typeof Play;description:string}[]=[
   {id:'select',name:'選択・移動',key:'V',icon:MousePointer2,description:'オブジェクトをドラッグして移動。空白をドラッグして範囲選択。Shift + クリックで選択を追加・解除。'},
   {id:'fluid',name:'物質',key:'1',icon:Droplets,description:'ドラッグで物質を配置。Ctrl / ⌘ で壁とガイドを上書き。右クリックは消しゴム。'},
-  {id:'erase',name:'消しゴム',key:'2',icon:Eraser,description:'ドラッグで物質・壁・ガイドを消去。モーターとピンも消去できます。可動壁は選択して Delete。'},
+  {id:'erase',name:'消しゴム',key:'2',icon:Eraser,description:'ドラッグで物質・壁・ガイドを消去。モーターと装置も消去できます。可動壁は選択して Delete。'},
   {id:'wallRect',name:'壁・矩形',key:'3',icon:Square,description:'ドラッグで固定壁を配置。Shift で正方形。流体を遮断します。可動壁は通過します。'},
   {id:'wallCircle',name:'壁・円',key:'4',icon:Circle,description:'押した位置が中心、ドラッグの長さが半径。固定壁は流体を遮断します。'},
-  {id:'guideRect',name:'ガイド・矩形',key:'5',icon:ScanLine,description:'ドラッグでガイドを配置。流体は通過し、可動壁の駆動は接触時に取り消されます。'},
+  {id:'guideRect',name:'ガイド・矩形',key:'5',icon:ScanLine,description:'ドラッグでガイドを配置。流体は通過し、柔らかい関節は接触で曲がり、固定関節は停止します。'},
   {id:'guideCircle',name:'ガイド・円',key:'6',icon:CircleDot,description:'押した位置を中心に円形ガイドを配置。流体を通し、機械を止めます。'},
-  {id:'bodyRect',name:'可動壁・矩形',key:'7',icon:Square,description:'ドラッグで剛体の板を配置。ピンの「この位置でつなぐ」で機械に接続できます。'},
+  {id:'bodyRect',name:'可動壁・矩形',key:'7',icon:Square,description:'ドラッグで剛体の板を配置。接続ツールで子→親の順にクリックして接続。'},
   {id:'bodyCircle',name:'可動壁・円',key:'8',icon:Circle,description:'ドラッグで円形の剛体を配置。中心からの距離が半径。回転しても形状を保ちます。'},
   {id:'motor',name:'モーター',key:'9',icon:Cog,description:'クリックでモーターを配置。プロパティで回転・ピストンを切り替え、駆動を設定。'},
-  {id:'pin',name:'ピン',key:'0',icon:MapPin,description:'クリックでピンを配置。重なったモーター・可動壁に付きます。「この位置でつなぐ」で板を接続。'},
+  {id:'connect',name:'接続',key:'0',icon:GitBranch,description:'子の可動壁、親の順にクリック。空白で背景へ切離し。選択中の関節マーカーをドラッグして支点を編集。'},
   {id:'pump',name:'ポンプ',key:'',icon:ScanLine,description:'クリックでポンプを設置。矢印の入口から出口へ物質を運びます。壁を貫く流路として使えます。'},
   {id:'valve',name:'バルブ',key:'',icon:SlidersHorizontal,description:'クリックでバルブを設置。閉じると中央のゲートが流体を遮断。開くと入口から出口へ移送します。'},
   {id:'membrane',name:'選択膜',key:'',icon:Layers,description:'指定した成分だけを入口から出口へ回収。容器の仕切りに設置して使います。出口満杯なら処理を待ちます。'},
@@ -24,7 +24,7 @@ const TOOLS:{id:Tool;name:string;key:string;icon:typeof Play;description:string}
   {id:'heat',name:'加熱',key:'',icon:Flame,description:'ドラッグで温めます。停止中も使えます。再生すると熱が伝わり、相変化します。'},
   {id:'cool',name:'冷却',key:'',icon:Snowflake,description:'ドラッグで冷やします。温度表示を使って熱の伝わり方を観察してください。'},
 ];
-interface Gesture {mode:'paint'|'shape'|'move'|'range'; tool:Tool;x:number;y:number;lastX:number;lastY:number;endX:number;endY:number;poses?:Map<number,Pose>;ids?:Set<number>;changed:boolean}
+interface Gesture {mode:'paint'|'shape'|'move'|'range'|'joint'; tool:Tool;x:number;y:number;lastX:number;lastY:number;endX:number;endY:number;poses?:Map<number,Pose>;ids?:Set<number>;changed:boolean}
 function FloatingPanel({title,icon:Icon,children,initial,className=''}:{title:string;icon:typeof Play;children:ReactNode;initial:{x:number;y:number};className?:string}) {
   const [position,setPosition]=useState(initial),[collapsed,setCollapsed]=useState(window.innerWidth<600);
   const root=useRef<HTMLDivElement>(null),drag=useRef<{dx:number;dy:number}|null>(null);
@@ -48,7 +48,7 @@ export default function FluidLab() {
   const canvas=useRef<HTMLCanvasElement>(null),gesture=useRef<Gesture|null>(null),cursorRef=useRef<{x:number;y:number}|null>(null);
   const [running,setRunning]=useState(true),[speed,setSpeed]=useState(1),[tool,setTool]=useState<Tool>('fluid'),[material,setMaterial]=useState(1),[radius,setRadius]=useState(6);
   const [selected,setSelected]=useState<Set<number>>(new Set()),[revision,setRevision]=useState(0),[thermal,setThermal]=useState(false),[connections,setConnections]=useState(true),[grid,setGrid]=useState(true),[hints,setHints]=useState(true);
-  const [experiment,setExperiment]=useState('physics'),[view,setView]=useState<'matter'|'temperature'|'component'|'flow'>('matter'),[component,setComponent]=useState(11);
+  const [experiment,setExperiment]=useState('overview'),[view,setView]=useState<'matter'|'temperature'|'component'|'flow'>('matter'),[component,setComponent]=useState(11);
   const [stats,setStats]=useState({count:engine.count(),fps:60,tick:0}),[cursor,setCursor]=useState<{x:number;y:number;material:number;temperature:number}|null>(null),[notice,setNotice]=useState(''),[help,setHelp]=useState(false);
   const noticeTimer=useRef<ReturnType<typeof setTimeout>|null>(null);
   const live=useRef({running,speed,tool,material,radius,selected,thermal,connections,grid,hints,view,component});live.current={running,speed,tool,material,radius,selected,thermal,connections,grid,hints,view,component};
@@ -66,7 +66,7 @@ export default function FluidLab() {
       if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='z'){e.preventDefault();undo();return;}
       if(e.code==='Space'){e.preventDefault();if(e.repeat)return;setRunning(v=>!v);return;}
       if(e.key==='Delete'||e.key==='Backspace'){e.preventDefault();remove();return;}
-      if(e.key==='Escape'){gesture.current=null;setSelected(new Set());setHelp(false);return;}
+      if(e.key==='Escape'){connection.current=null;gesture.current=null;setSelected(new Set());setHelp(false);return;}
       if(e.key==='['||e.key===']'){setRadius(r=>clamp(r+(e.key===']'?1:-1),1,28));return;}
       const t=TOOLS.find(t=>t.key.toLowerCase()===e.key.toLowerCase());if(t&&!e.ctrlKey&&!e.metaKey&&!e.altKey)setTool(t.id);
     };
@@ -95,18 +95,22 @@ export default function FluidLab() {
       for(let py=Math.max(0,Math.floor(y-radius));py<=Math.min(H-1,Math.ceil(y+radius));py++)for(let px=Math.max(0,Math.floor(x-radius));px<=Math.min(W-1,Math.ceil(x+radius));px++)if((px-x)**2+(py-y)**2<=radius*radius){const i=py*W+px;engine.temperature[i]=clamp(engine.temperature[i]+(t==='heat'?35:-25),-273,2000);}
     }else engine.paint(x,y,radius,material,overwrite,t==='erase');
   };
+  const connection=useRef<number|null>(null);
+  useEffect(()=>{connection.current=null;},[tool]);
   const pointerDown=(e:ReactPointerEvent<HTMLCanvasElement>)=> {
     if(e.button!==0&&e.button!==2)return;e.preventDefault();e.currentTarget.setPointerCapture(e.pointerId);
     const p=point(e),t=e.button===2?'erase':tool;cursorRef.current=p;
     const base:Gesture={mode:'paint',tool:t,x:p.x,y:p.y,lastX:p.x,lastY:p.y,endX:p.x,endY:p.y,changed:false};
+    if(t==='connect'){const hit=engine.hit(p.x,p.y);if(connection.current===null){if(hit){connection.current=hit.id;setSelected(new Set([hit.id]));inform('親をクリック · 空白で背景へ切離し');}}else{const child=connection.current;if(hit?.id===child){connection.current=null;inform('接続を解除しました');return;}engine.checkpoint();if(engine.reparent(child,hit?.id??null)){engine.rasterize();inform('接続しました · 支点は選択ツールで移動できます');}else{engine.history.pop();inform('循環する接続はできません');}connection.current=null;refresh();}return;}
     if(t==='select') {
+      if(!e.shiftKey){const hinge=engine.nodes.find(n=>selected.has(n.id)&&n.kind!=='motor'&&Math.hypot(engine.jointPoint(n.id).x-p.x,engine.jointPoint(n.id).y-p.y)<2);if(hinge){base.mode='joint';base.ids=new Set([hinge.id]);gesture.current=base;return;}}
       const node=engine.hit(p.x,p.y);
       if(e.shiftKey){if(node)setSelected(s=>{const next=new Set(s);if(next.has(node.id))next.delete(node.id);else next.add(node.id);return next;});return;}
       if(node){const ids=selected.has(node.id)?new Set(selected):new Set([node.id]);setSelected(ids);base.mode='move';base.ids=ids;base.poses=engine.poses();}
       else {setSelected(new Set());base.mode='range';}
       gesture.current=base;return;
     }
-    if(t==='motor'||t==='pin'||t==='thermostat'||t==='pump'||t==='valve'||t==='membrane') {
+    if(t==='motor'||t==='thermostat'||t==='pump'||t==='valve'||t==='membrane') {
       const existing=t==='motor'?engine.nodes.find(n=>n.kind==='motor'&&Math.floor(engine.poses().get(n.id)!.x)===Math.floor(p.x)&&Math.floor(engine.poses().get(n.id)!.y)===Math.floor(p.y)):undefined;
       if(!existing)engine.checkpoint();const node=existing??engine.add(t,Math.floor(p.x)+.5,Math.floor(p.y)+.5);
       if(node){setSelected(new Set([node.id]));setTool('select');setHints(false);if(t==='thermostat'){setThermal(true);setView('temperature');}}else inform('オブジェクトの配置上限に達しました');refresh();return;
@@ -122,6 +126,7 @@ export default function FluidLab() {
     if(g.mode==='shape'&&e.shiftKey&&!g.tool.endsWith('Circle')){const sx=x>=g.x?1:-1,sy=y>=g.y?1:-1;const side=Math.min(Math.max(Math.abs(x-g.x),Math.abs(y-g.y)),sx>0?W-.5-g.x:g.x-.5,sy>0?H-.5-g.y:g.y-.5);x=g.x+sx*side;y=g.y+sy*side;}
     g.endX=x;g.endY=y;
     if(g.mode==='paint'){const distance=Math.hypot(x-g.lastX,y-g.lastY),steps=Math.max(1,Math.ceil(distance/Math.max(1,radius/2)));for(let s=1;s<=steps;s++)paint(g.lastX+(x-g.lastX)*s/steps,g.lastY+(y-g.lastY)*s/steps,g.tool,e.ctrlKey||e.metaKey);}
+    if(g.mode==='joint'){if(!g.changed){engine.checkpoint();g.changed=true;}engine.setJointAnchor([...g.ids!][0],x,y);}
     if(g.mode==='move'&&Math.hypot(x-g.x,y-g.y)>.3){if(!g.changed){engine.checkpoint();g.changed=true;}if(!engine.move(g.ids!,x-g.x,y-g.y,g.poses!))inform('ガイドに接触しています');setHints(false);}
     g.lastX=x;g.lastY=y;
   };
@@ -147,11 +152,11 @@ export default function FluidLab() {
   const visit=(parent:number|null,depth:number)=>{for(const n of engine.nodes.filter(n=>n.parent===parent)){treeRows.push({node:n,depth});visit(n.id,depth+1);}};visit(null,0);
   const currentTool=TOOLS.find(t=>t.id===tool)!;
   const chooseMaterial=(index:number)=>{setMaterial(index);setTool('fluid');};
-  const resetDemo=()=>{engine.checkpoint();if(experiment==='physics')engine.demo();else engine.experiment(experiment);setSelected(new Set());setHints(experiment==='physics');refresh();inform('見本を配置しました · 編集は Undo で戻せます');};
+  const resetDemo=()=>{connection.current=null;engine.checkpoint();if(experiment==='overview')engine.demo();else if(experiment==='physics')engine.physicsDemo();else if(experiment==='joints')engine.jointDemo();else engine.experiment(experiment);setSelected(new Set());setHints(experiment==='physics');refresh();inform('見本を配置しました · 編集は Undo で戻せます');};
   const [initialSize]=useState({width:window.innerWidth,height:window.innerHeight});
   return <main className="lab" data-revision={revision}>
     <header className="app-header"><div className="brand-icon"><FlaskConical size={20}/></div><div className="brand"><h1>セル流体実験台 <span>FLUID LAB</span></h1><p>置く。動かす。発見する。</p></div><span className="version-tag">SANDBOX / 01</span>
-      <div className="header-actions"><button onClick={undo} title="Undo · Ctrl / ⌘ + Z" disabled={!engine.history.length}><Undo2 size={15}/><span>戻す</span></button><i/><button onClick={saved}><Save size={15}/><span>保存</span></button><button onClick={load}><FolderOpen size={15}/><span>読込</span></button><select className="experiment-select" aria-label="実験見本" value={experiment} onChange={e=>setExperiment(e.target.value)}><option value="physics">物理の見本</option><option value="dissolve">溶解と析出</option><option value="distill">混合液の蒸留</option><option value="reaction">沈殿と膜分離</option></select><button onClick={resetDemo}><FlaskConical size={15}/><span>見本</span></button><button className="icon-button help-button" aria-label="操作ガイド" onClick={()=>setHelp(true)}><HelpCircle size={18}/></button></div>
+      <div className="header-actions"><button onClick={undo} title="Undo · Ctrl / ⌘ + Z" disabled={!engine.history.length}><Undo2 size={15}/><span>戻す</span></button><i/><button onClick={saved}><Save size={15}/><span>保存</span></button><button onClick={load}><FolderOpen size={15}/><span>読込</span></button><select className="experiment-select" aria-label="実験見本" value={experiment} onChange={e=>setExperiment(e.target.value)}><option value="overview">合成・分離と関節</option><option value="joints">関節の比較</option><option value="physics">物理の見本</option><option value="dissolve">溶解と析出</option><option value="distill">混合液の蒸留</option><option value="reaction">沈殿と膜分離</option></select><button onClick={resetDemo}><FlaskConical size={15}/><span>見本</span></button><button className="icon-button help-button" aria-label="操作ガイド" onClick={()=>setHelp(true)}><HelpCircle size={18}/></button></div>
     </header>
     <div className="workspace">
       <div className="workspace-label"><span className="live-dot"/>CELLULAR PHYSICS <span className="dim">/ 400 × 224</span></div>
@@ -173,7 +178,7 @@ export default function FluidLab() {
     </FloatingPanel>
     <FloatingPanel title="プロパティ" icon={SlidersHorizontal} initial={{x:Math.max(16,initialSize.width-(initialSize.width<600?171:270)),y:86}} className="properties-panel">
       {node&&nodePose?<>
-        <div className="object-heading"><span className={`object-symbol ${node.kind}`}><NodeIcon node={node}/></span><div><strong>{node.name}</strong><span>#{String(node.id).padStart(2,'0')} · {node.joint==='fixed'?'固定関節':'フリー関節'}</span></div></div>
+        <div className="object-heading"><span className={`object-symbol ${node.kind}`}><NodeIcon node={node}/></span><div><strong>{node.name}</strong><span>#{String(node.id).padStart(2,'0')} · {node.joint==='fixed'?'固定関節':node.joint==='spring'?'ばね復帰関節':'自由関節'}</span></div></div>
         <label className="text-field">名前<input aria-label="オブジェクト名" value={node.name} maxLength={100} onFocus={beforeEdit} onChange={e=>edit(node,{name:e.target.value})}/></label>
         <div className="coordinate-row"><span>X <b>{nodePose.x.toFixed(1)}</b></span><span>Y <b>{nodePose.y.toFixed(1)}</b></span><span>角度 <b>{(nodePose.a*180/Math.PI%360).toFixed(0)}°</b></span></div>
         {['pump','valve','membrane'].includes(node.kind)&&<>
@@ -205,19 +210,21 @@ export default function FluidLab() {
         </>}
         {(node.kind==='rect'||node.kind==='circle')&&<ValueControl label="角度" value={((nodePose.a*180/Math.PI%360)+360)%360} min={0} max={360} step={1} unit="°" onStart={beforeEdit} onChange={v=>{engine.setWorld(node,nodePose.x,nodePose.y,v*Math.PI/180);engine.rasterize();refresh();}}/>}
         <div className="section-label">接続 <span>JOINT</span></div><label className="text-field">親オブジェクト<select aria-label="親オブジェクト" value={node.parent??''} onChange={e=>{beforeEdit();if(!engine.reparent(node.id,e.target.value===''?null:Number(e.target.value)))inform('循環する接続は作れません');engine.rasterize();refresh();}}><option value="">背景</option>{engine.nodes.filter(n=>!engine.isDescendant(n.id,node.id)).map(n=><option value={n.id} key={n.id}>{n.name} #{n.id}</option>)}</select></label>
-        <div className="segment"><button className={node.joint==='fixed'?'active':''} onClick={()=>{beforeEdit();engine.setJoint(node.id,'fixed');refresh();}}>固定関節</button><button className={node.joint==='free'?'active':''} onClick={()=>{beforeEdit();engine.setJoint(node.id,'free');refresh();}}>フリー関節</button></div><p className="small-note">{node.joint==='fixed'?'親の移動と回転に追従します。':'親の接続点に追従し、自身の角度を保ちます。'}</p>
-        {node.kind==='pin'&&<button className="full-button accent" onClick={()=>{beforeEdit();const connected=engine.connect(node.id);refresh();inform(connected?'重なった可動壁を接続しました':'接続できる可動壁がこの位置にありません');}}><GitBranch size={14}/>この位置でつなぐ</button>}
+        <div className="segment"><button className={node.joint==='fixed'?'active':''} onClick={()=>{beforeEdit();engine.setJoint(node.id,'fixed');refresh();}}>固定関節</button><button className={node.joint==='free'?'active':''} onClick={()=>{beforeEdit();engine.setJoint(node.id,'free');refresh();}}>自由関節</button><button className={node.joint==='spring'?'active':''} onClick={()=>{beforeEdit();engine.setJoint(node.id,'spring');refresh();}}>ばね復帰</button></div><p className="small-note">{node.joint==='fixed'?'親の移動と回転に追従します。':node.joint==='spring'?'ガイドで曲がり、離れると基準角度に戻ります。':'ガイドで曲がり、その後は世界に対する角度を保ちます。'}</p>
+        <p className="small-note">選択中の関節マーカーをドラッグすると、物体を動かさず支点を変更できます。</p>
+        {node.joint==='spring'&&<><label>曲がりの上限（度）<input aria-label="関節の角度上限" type="range" min="0" max="180" value={(node.jointLimit??Math.PI/2)*180/Math.PI} onPointerDown={beforeEdit} onChange={e=>{node.jointLimit=+e.target.value*Math.PI/180;refresh();}}/></label><label>ばねの強さ<input aria-label="ばねの強さ" type="range" min="0" max="80" value={node.stiffness??18} onPointerDown={beforeEdit} onChange={e=>{node.stiffness=+e.target.value;refresh();}}/></label><label>減衰<input aria-label="関節の減衰" type="range" min="0" max="30" value={node.damping??8} onPointerDown={beforeEdit} onChange={e=>{node.damping=+e.target.value;refresh();}}/></label></>}
+
         <div className="object-actions"><button onClick={()=>{beforeEdit();engine.detach(node.id);refresh();}}><GitBranch size={13}/>子を外す</button><button className="danger" onClick={remove}><Trash2 size={13}/>削除</button></div>
       </>:selected.size>1?<><div className="empty-properties"><Layers size={28}/><strong>{selected.size} 個のオブジェクトを選択</strong><p>選択されたまとまりをドラッグで移動できます。親子は二重に移動しません。</p></div><button className="full-button danger" onClick={remove}><Trash2 size={14}/>選択オブジェクトを削除</button></>:<>
         <div className="empty-properties"><currentTool.icon size={27}/><strong>{currentTool.name}</strong><p>{currentTool.description}</p></div><div className="tip"><MousePointer2 size={14}/><span>機械を選択すると、ここで設定を編集できます。</span></div><div className="mini-legend"><span><i className="legend-wall"/>壁</span><span><i className="legend-guide"/>ガイド</span><span><i className="legend-body"/>可動壁</span><span><i className="legend-motor"/>モーター</span></div>
       </>}
     </FloatingPanel>
     <FloatingPanel title="オブジェクト" icon={Layers} initial={{x:Math.max(16,initialSize.width-(initialSize.width<600?171:270)),y:initialSize.width<600?129:Math.min(460,Math.max(320,initialSize.height-300))}} className="objects-panel">
-      <div className="tree-root"><ChevronDown size={13}/><Grid2X2 size={13}/><span>背景</span><b>{engine.nodes.length}</b></div><div className="object-tree">{treeRows.length?treeRows.map(({node:n,depth})=><div className={`tree-row ${selected.has(n.id)?'selected':''}`} key={n.id} style={{paddingLeft:12+depth*13}}><button className="tree-select" onClick={e=>{setTool('select');setSelected(s=>{if(e.shiftKey){const next=new Set(s);if(next.has(n.id))next.delete(n.id);else next.add(n.id);return next;}return new Set([n.id]);});}}><NodeIcon node={n}/><span>{n.name}</span>{n.blocked&&<i className="blocked-dot" title="ガイドまたは盤面端に接触"/>}</button><button title={`${n.joint==='fixed'?'固定':'フリー'}関節 · クリックで切替`} aria-label={`${n.name}の関節切替`} className={`joint-tag ${n.joint}`} onClick={()=>{beforeEdit();engine.setJoint(n.id,n.joint==='fixed'?'free':'fixed');refresh();}}>{n.joint==='fixed'?'固定':'自由'}</button></div>):<p className="tree-empty">モーターや可動壁を配置すると<br/>接続関係がここに表示されます。</p>}</div><div className="tree-footer"><span>Shift + クリックで複数選択</span><button title="盤面を全消去 · Undo可能" aria-label="盤面を全消去" onClick={()=>{engine.checkpoint();engine.clear();setSelected(new Set());setHints(false);refresh();inform('盤面を空にしました · Undo で戻せます');}}><Trash2 size={13}/></button></div>
+      <div className="tree-root"><ChevronDown size={13}/><Grid2X2 size={13}/><span>背景</span><b>{engine.nodes.length}</b></div><div className="object-tree">{treeRows.length?treeRows.map(({node:n,depth})=><div className={`tree-row ${selected.has(n.id)?'selected':''}`} key={n.id} style={{paddingLeft:12+depth*13}}><button className="tree-select" onClick={e=>{setTool('select');setSelected(s=>{if(e.shiftKey){const next=new Set(s);if(next.has(n.id))next.delete(n.id);else next.add(n.id);return next;}return new Set([n.id]);});}}><NodeIcon node={n}/><span>{n.name}</span>{n.blocked&&<i className="blocked-dot" title="ガイドまたは盤面端に接触"/>}</button><button title={`${n.joint==='fixed'?'固定':n.joint==='spring'?'ばね復帰':'自由'}関節 · クリックで切替`} aria-label={`${n.name}の関節切替`} className={`joint-tag ${n.joint}`} onClick={()=>{beforeEdit();engine.setJoint(n.id,n.joint==='fixed'?'free':n.joint==='free'?'spring':'fixed');refresh();}}>{n.joint==='fixed'?'固定':n.joint==='spring'?'ばね':'自由'}</button></div>):<p className="tree-empty">モーターや可動壁を配置すると<br/>接続関係がここに表示されます。</p>}</div><div className="tree-footer"><span>Shift + クリックで複数選択</span><button title="盤面を全消去 · Undo可能" aria-label="盤面を全消去" onClick={()=>{engine.checkpoint();engine.clear();setSelected(new Set());setHints(false);refresh();inform('盤面を空にしました · Undo で戻せます');}}><Trash2 size={13}/></button></div>
     </FloatingPanel>
     <footer className="statusbar"><span className={`status-indicator ${running?'playing':''}`}/><span>{running?'シミュレーション実行中':'編集モード · 停止中'}</span><span className="status-separator"/><span className="cursor-status">X <b>{cursor?.x??'—'}</b> Y <b>{cursor?.y??'—'}</b>{cursor&&<><i/><span>{engine.chemistry.components(engine.index(cursor.x,cursor.y)).map(p=>`${MATERIALS[p.material].name} ${(p.amount/engine.chemistry.mass(engine.index(cursor.x,cursor.y))*100).toFixed(0)}%`).join(' / ')||'空気'}</span><b>{cursor.temperature.toFixed(1)}°C</b><span>量 {engine.chemistry.mass(engine.index(cursor.x,cursor.y)).toFixed(2)}</span></>}</span><span className="status-right"><span>{stats.count.toLocaleString()} セル / 量 {engine.totalMass().toFixed(1)}</span>{engine.trapped.length>0&&<span title="逃げ場ができると盤面に戻ります">{engine.trapped.length} 粒子を一時保持</span>}<span>{(stats.tick/60).toFixed(1)} s</span><span className={stats.fps<30?'low-fps':''}>{stats.fps} FPS</span></span></footer>
     {notice&&<div className="toast" role="status"><Check size={16}/>{notice}</div>}
-    {help&&<div className="modal-backdrop" onClick={()=>setHelp(false)}><section className="help-modal" aria-modal="true" role="dialog" aria-label="操作ガイド" onClick={e=>e.stopPropagation()}><button className="modal-close icon-button" aria-label="ガイドを閉じる" onClick={()=>setHelp(false)}><X size={19}/></button><FlaskConical size={30}/><h2>小さなセルから、実験を。</h2><p>物質を置いて、機械で動かして、その変化を観察する。</p><div className="reaction-card"><strong>{REACTIONS[0].name}</strong><p>{REACTIONS[0].ratio} · {REACTIONS[0].temperature}</p><p>結晶粉Aは水に溶け、冷却で析出。揮発液Bは65°Cから蒸発。重液Cは水と分離します。</p></div><ol><li><strong>物質を置く</strong><span>物質を選び、盤面をドラッグ。水・油・水銀の密度差を試してみましょう。</span></li><li><strong>機械を組む</strong><span>モーターと可動壁を置き、接続点にピンを配置。「この位置でつなぐ」で板を接続します。</span></li><li><strong>動かして観察</strong><span>Space で再生・停止。停止中も移動・設定ができます。加熱・冷却と温度表示で相変化を観察。</span></li></ol><div className="shortcut-list"><span><kbd>V</kbd>選択・移動</span><span><kbd>1–0</kbd>ツール切替</span><span><kbd>Space</kbd>再生 / 停止</span><span><kbd>[ ]</kbd>ブラシ半径</span><span><kbd>Ctrl / ⌘ Z</kbd>Undo</span><span><kbd>Delete</kbd>選択を削除</span></div><p className="small-note">ウィンドウはタイトルバーをドラッグして移動、− で折りたたみ。保存はこのブラウザ内のみ。科学計算用の CFD ではなく、挙動を楽しむセルモデルです。</p><button className="full-button accent" onClick={()=>setHelp(false)}>実験をはじめる <Play size={14}/></button></section></div>}
+    {help&&<div className="modal-backdrop" onClick={()=>setHelp(false)}><section className="help-modal" aria-modal="true" role="dialog" aria-label="操作ガイド" onClick={e=>e.stopPropagation()}><button className="modal-close icon-button" aria-label="ガイドを閉じる" onClick={()=>setHelp(false)}><X size={19}/></button><FlaskConical size={30}/><h2>小さなセルから、実験を。</h2><p>物質を置いて、機械で動かして、その変化を観察する。</p><div className="reaction-card"><strong>{REACTIONS[0].name}</strong><p>{REACTIONS[0].ratio} · {REACTIONS[0].temperature}</p><p>結晶粉Aは水に溶け、冷却で析出。揮発液Bは65°Cから蒸発。重液Cは水と分離します。</p></div><ol><li><strong>物質を置く</strong><span>物質を選び、盤面をドラッグ。水・油・水銀の密度差を試してみましょう。</span></li><li><strong>機械を組む</strong><span>モーターと可動壁を置き、接続ツール（0）で子→親の順にクリック。関節は固定・自由・ばね復帰から選び、支点をドラッグで調整します。</span></li><li><strong>動かして観察</strong><span>Space で再生・停止。停止中も移動・設定ができます。加熱・冷却と温度表示で相変化を観察。</span></li></ol><div className="shortcut-list"><span><kbd>V</kbd>選択・移動</span><span><kbd>1–0</kbd>ツール切替</span><span><kbd>Space</kbd>再生 / 停止</span><span><kbd>[ ]</kbd>ブラシ半径</span><span><kbd>Ctrl / ⌘ Z</kbd>Undo</span><span><kbd>Delete</kbd>選択を削除</span></div><p className="small-note">ウィンドウはタイトルバーをドラッグして移動、− で折りたたみ。保存はこのブラウザ内のみ。科学計算用の CFD ではなく、挙動を楽しむセルモデルです。</p><button className="full-button accent" onClick={()=>setHelp(false)}>実験をはじめる <Play size={14}/></button></section></div>}
   </main>;
 }
 function NodeIcon({node}:{node:LabNode}) {const Icon=node.kind==='motor'?Cog:node.kind==='pump'?ScanLine:node.kind==='valve'?SlidersHorizontal:node.kind==='membrane'?Layers:node.kind==='thermostat'?Thermometer:node.kind==='pin'?MapPin:node.kind==='rect'?Square:Circle;return <Icon size={13} className={`node-icon ${node.kind}`}/>;}

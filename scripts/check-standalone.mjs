@@ -24,7 +24,7 @@ try {
   await expect(page.getByText('編集モード · 停止中')).toBeVisible();
   await page.getByRole('button', { name: '保存', exact: true }).click();
   const initial = await page.evaluate(() => JSON.parse(localStorage.getItem('cell-fluid-lab-v1')));
-  expect(initial.nodes).toHaveLength(6);
+  expect(initial.nodes.some(n=>n.joint==='spring')).toBe(true);expect(initial.nodes.some(n=>n.kind==='pin')).toBe(false);
   expect(initial.cells.some(n => n === 1)).toBe(true);
   await page.getByRole('button', { name: '盤面を全消去' }).click();
   await page.getByRole('button', { name: '水', exact: true }).click();
@@ -65,7 +65,7 @@ try {
   await expect(page.getByLabel('通過成分')).toHaveValue('16');
   await page.getByRole('button', { name: '保存', exact: true }).click();
   const chemistry = await page.evaluate(() => JSON.parse(localStorage.getItem('cell-fluid-lab-v1')));
-  expect(chemistry.version).toBe(5);
+  expect(chemistry.version).toBe(6);
   expect(chemistry.chemistry.secondaryAmount.some(amount => amount > 0)).toBe(true);
   expect(errors).toEqual([]);
   expect(external).toEqual([]);

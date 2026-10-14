@@ -22,7 +22,7 @@ describe('composition and chemistry',()=>{
     const f=setup(),i=put(f,100,100,[{material:1,amount:.8},{material:11,amount:.2}],0);f.chemistry.step();expect(f.chemistry.quantity(i,11)).toBeLessThan(.2);expect(Array.from(f.cells).filter(m=>m===11).length).toBeGreaterThan(0);expect(f.totalMass()).toBeCloseTo(1,5);
   });
   it('reacts A 1 + D 1 into E 2 without requiring an apparatus',()=>{
-    const e=setup(),i=put(e,100,100,[{material:1,amount:.8},{material:11,amount:.1},{material:15,amount:.1}],55);const before=energy(e);e.chemistry.step();const used=.1-amount(e,11);expect(used).toBeGreaterThan(0);expect(.1-amount(e,15)).toBeCloseTo(used,5);expect(amount(e,16)).toBeCloseTo(used*2,5);expect(amount(e,1)).toBeCloseTo(.8,5);expect(e.totalMass()).toBeCloseTo(1,5);expect(energy(e)-before).toBeCloseTo(used*20,3);expect(e.chemistry.components(i).length).toBeLessThanOrEqual(3);
+    const e=setup(),i=put(e,100,100,[{material:1,amount:.8},{material:11,amount:.1},{material:15,amount:.1}],55);const before=energy(e);e.chemistry.step();const used=.1-amount(e,11);expect(used).toBeGreaterThan(0);expect(.1-amount(e,15)).toBeCloseTo(used,5);expect(amount(e,16)).toBeCloseTo(used*2,5);expect(amount(e,1)).toBeCloseTo(.8,5);expect(e.totalMass()).toBeCloseTo(1,5);expect(energy(e)).toBeCloseTo(before,3);expect(e.chemistry.components(i).length).toBeLessThanOrEqual(3);
   });
   it('waits when phase/reaction output is blocked and never discards components',()=>{
     const e=setup();e.terrain.fill(1);const i=e.index(100,100);e.terrain[i]=0;e.chemistry.write(i,[{material:1,amount:.8},{material:11,amount:.1},{material:15,amount:.1}],55);const before=e.chemistry.components(i);for(let n=0;n<5;n++)e.chemistry.step();expect(e.chemistry.components(i)).toEqual(before);
@@ -63,7 +63,7 @@ describe('process devices and persistence',()=>{
     const e=setup();put(e,100,100,[{material:1,amount:.8},{material:11,amount:.2}]);const saved=e.snapshot(),before=e.snapshot();const bad=structuredClone(saved);bad.chemistry!.amount[e.index(100,100)]=1;expect(e.load(JSON.stringify(bad))).toBe(false);expect(e.snapshot()).toEqual(before);const unknown=structuredClone(saved);unknown.materialIds![1]='unknown';expect(e.load(JSON.stringify(unknown))).toBe(false);expect(e.snapshot()).toEqual(before);
   });
   it.each(['dissolve','distill','reaction'])('experiment %s is populated and conserves material',kind=>{
-    const e=setup();e.experiment(kind);const before=e.totalMass();expect(e.experimentTitle).not.toBe('');expect(e.nodes.length).toBeGreaterThan(0);for(let n=0;n<30;n++)e.step();expect(e.totalMass()).toBeCloseTo(before,2);expect(Array.from(e.temperature).every(Number.isFinite)).toBe(true);expect(e.snapshot().version).toBe(6);
+    const e=setup();e.experiment(kind);const before=e.totalMass();expect(e.experimentTitle).not.toBe('');expect(e.nodes.length).toBeGreaterThan(0);for(let n=0;n<30;n++)e.step();expect(e.totalMass()).toBeCloseTo(before,2);expect(Array.from(e.temperature).every(Number.isFinite)).toBe(true);expect(e.snapshot().version).toBe(7);
   });
 });
 

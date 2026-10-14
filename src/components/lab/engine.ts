@@ -1,30 +1,35 @@
+import {buildCycles} from './cycle-demos';
+import {runProcesses,type Process,type CustomPorts,PROCESSES} from './processes';
 import { Chemistry, type ChemistrySnapshot, type Component } from './chemistry';
 export const W = 400, H = 224, SIZE = W * H;
 export const STORAGE_KEY = 'cell-fluid-lab-v1';
 export const DT = 1 / 60;
 export const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n));
 export interface Material { id: string; description?: string; fictional?: boolean; phase: 'gas' | 'liquid' | 'solid' | 'powder'; name: string; en: string; density: number; viscosity: number; conductivity: number; capacity: number; temperature: number; color: [number, number, number] }
-export const MATERIAL_IDS=['air','water','oil','mercury','ice','lava','rock','steam','smoke','hydrogen','mercury-vapor','crystal-a','solvent-b','solvent-b-vapor','heavy-c','reagent-d','precipitate-e'];
+export const MATERIAL_IDS=['air','water','oil','mercury','ice','lava','rock','steam','smoke','hydrogen','mercury-vapor','crystal-a','solvent-b','solvent-b-vapor','heavy-c','reagent-d','precipitate-e','oxygen','carbon-dioxide','nitrogen'];
 export const MATERIALS: Material[] = [
   {phase:'gas',name:'空気',en:'AIR',density:0,viscosity:0,conductivity:.04,capacity:.35,temperature:20,color:[12,20,29]},
   {phase:'liquid',name:'水',en:'WATER',density:4,viscosity:8,conductivity:.65,capacity:4.2,temperature:20,color:[57,158,235]},
-  {phase:'liquid',name:'油',en:'OIL',density:2,viscosity:42,conductivity:.15,capacity:2,temperature:25,color:[224,183,67]},
+  {phase:'liquid',name:'炭化水素油',en:'OIL',density:2,viscosity:42,conductivity:.15,capacity:2,temperature:25,color:[224,183,67]},
   {phase:'liquid',name:'水銀',en:'MERCURY',density:9,viscosity:5,conductivity:.85,capacity:.6,temperature:20,color:[182,198,214]},
   {phase:'solid',name:'氷',en:'ICE',density:3,viscosity:100,conductivity:.75,capacity:2.1,temperature:-12,color:[157,227,243]},
   {phase:'liquid',name:'溶岩',en:'LAVA',density:7,viscosity:74,conductivity:.4,capacity:1.5,temperature:1200,color:[245,91,43]},
   {phase:'solid',name:'岩石',en:'ROCK',density:6,viscosity:100,conductivity:.35,capacity:1.2,temperature:420,color:[117,108,105]},
-  {phase:'gas',name:'蒸気',en:'STEAM',density:-3,viscosity:4,conductivity:.2,capacity:1.9,temperature:110,color:[174,206,219]},
-  {phase:'gas',name:'煙',en:'SMOKE',density:-2,viscosity:14,conductivity:.12,capacity:1,temperature:180,color:[120,131,149]},
+  {phase:'gas',name:'水蒸気',en:'STEAM',density:-3,viscosity:4,conductivity:.2,capacity:1.9,temperature:110,color:[174,206,219]},
+  {phase:'powder',name:'煤',en:'SOOT',density:5,viscosity:24,conductivity:.12,capacity:1,temperature:20,color:[120,131,149]},
   {phase:'gas',name:'水素',en:'HYDROGEN',density:-6,viscosity:0,conductivity:.2,capacity:1.4,temperature:20,color:[160,139,224]},
   {phase:'gas',name:'水銀蒸気',en:'HG VAPOR',density:-1,viscosity:4,conductivity:.25,capacity:.7,temperature:370,color:[156,179,163]},
-  {phase:'powder',name:'結晶粉A',en:'CRYSTAL A',density:6,viscosity:24,conductivity:.2,capacity:1.4,temperature:20,color:[114,230,171],fictional:true,description:'水に溶け、加熱で溶ける量が増える。冷却・蒸発で析出。Dと反応して沈殿Eになる。'},
-  {phase:'liquid',name:'揮発液B',en:'SOLVENT B',density:3,viscosity:6,conductivity:.3,capacity:2.5,temperature:20,color:[221,139,224],fictional:true,description:'水と混ざる架空の溶媒。65°Cから蒸発し、蒸気を冷却すると分離回収できる。'},
-  {phase:'gas',name:'B蒸気',en:'B VAPOR',density:-4,viscosity:3,conductivity:.12,capacity:1.5,temperature:85,color:[230,187,234],fictional:true,description:'揮発液Bの蒸気。55°C以下で凝縮する。'},
-  {phase:'liquid',name:'重液C',en:'HEAVY C',density:7,viscosity:18,conductivity:.25,capacity:2,temperature:20,color:[68,168,158],fictional:true,description:'水に溶けず、水より下へ沈む。底部からポンプで回収できる。'},
-  {phase:'powder',name:'反応粉D',en:'REAGENT D',density:5,viscosity:28,conductivity:.2,capacity:1.4,temperature:20,color:[244,181,103],fictional:true,description:'水に溶け、5〜180°CでAと反応。A 1 + D 1 → E 2。反応は弱く発熱する。'},
-  {phase:'powder',name:'沈殿E',en:'PRECIPITATE E',density:8,viscosity:32,conductivity:.15,capacity:1.4,temperature:20,color:[199,205,117],fictional:true,description:'AとDからできる不溶性の粒状固体。沈降・選択膜で回収できる。'},
+  {phase:'powder',name:'晶塩',en:'CRYSTAL SALT',density:6,viscosity:24,conductivity:.2,capacity:1.4,temperature:20,color:[114,230,171],fictional:true,description:'水に溶け、加熱で溶ける量が増える。冷却・蒸発で析出。活性剤と反応して複合結晶になる。'},
+  {phase:'liquid',name:'揮発溶媒',en:'VOLATILE SOLVENT',density:3,viscosity:6,conductivity:.3,capacity:2.5,temperature:20,color:[221,139,224],fictional:true,description:'水と混ざる架空の溶媒。65°Cから蒸発し、蒸気を冷却すると分離回収できる。'},
+  {phase:'gas',name:'溶媒蒸気',en:'SOLVENT VAPOR',density:-4,viscosity:3,conductivity:.12,capacity:1.5,temperature:85,color:[230,187,234],fictional:true,description:'揮発溶媒の蒸気。55°C以下で凝縮する。'},
+  {phase:'liquid',name:'抽出液',en:'EXTRACTANT',density:7,viscosity:18,conductivity:.25,capacity:2,temperature:20,color:[68,168,158],fictional:true,description:'水と混ざらない重い抽出液。抽出器で晶塩を取り込み、回収器で分離して繰り返し使える。'},
+  {phase:'powder',name:'活性剤',en:'ACTIVATOR',density:5,viscosity:28,conductivity:.2,capacity:1.4,temperature:20,color:[244,181,103],fictional:true,description:'水に溶け、5〜180°CでAと反応。晶塩 1 + 活性剤 1 → 複合結晶 2。反応は弱く発熱する。'},
+  {phase:'powder',name:'複合結晶',en:'COMPOSITE CRYSTAL',density:8,viscosity:32,conductivity:.15,capacity:1.4,temperature:20,color:[199,205,117],fictional:true,description:'晶塩と活性剤からできる不溶性結晶。選択膜で回収し、電力を使って220°Cで加熱再生できる。'},
+  {phase:'gas',name:'酸素',en:'OXYGEN',density:-1,viscosity:1,conductivity:.15,capacity:1,temperature:20,color:[124,205,246],description:'燃焼で消費する有限の酸化剤。水の電気分解で再生できる。'},
+  {phase:'gas',name:'二酸化炭素',en:'CARBON DIOXIDE',density:-.5,viscosity:3,conductivity:.1,capacity:.85,temperature:20,color:[163,178,165],description:'油や煤の燃焼生成物。燃焼を支えず、気体として移送・分離できる。'},
+  {phase:'gas',name:'窒素',en:'NITROGEN',density:-1,viscosity:1,conductivity:.12,capacity:1,temperature:20,color:[126,142,161],description:'空気の不活性成分。燃焼で酸素だけが消費され、窒素は残る。'},
 ].map((m,i)=>({...m,id:MATERIAL_IDS[i]} as Material));
-export type NodeKind = 'motor' | 'pin' | 'rect' | 'circle' | 'thermostat' | 'pump' | 'valve' | 'membrane';
+export type NodeKind = 'motor' | 'pin' | 'rect' | 'circle' | 'thermostat' | 'pump' | 'valve' | 'membrane' | 'processor';
 export interface LabNode {
   id: number; kind: NodeKind; name: string; parent: number | null; joint: 'fixed' | 'free' | 'spring';
   anchorX?:number; anchorY?:number; jointOffset?:number; jointVelocity?:number; jointLimit?:number; stiffness?:number; damping?:number; jointContact?:boolean;
@@ -32,15 +37,16 @@ export interface LabNode {
   mode: 'rotation' | 'piston'; direction: number; speed: number; amp: number; strokeAngle: number;
   t: number; bounce: number; repeat: boolean; blocked: boolean;
   targetTemperature?: number; effectRadius?: number; enabled?: boolean;
+  process?:Process;power?:number;energyUsed?:number;heatRemoved?:number;customPorts?:CustomPorts;
   flowRate?: number; portAngle?: number; portDistance?: number; filterMaterial?: number; deviceStatus?: string; transported?: number;
 }
 export interface Pose { x: number; y: number; a: number; ax: number; ay: number }
 export interface Trapped { x: number; y: number; material: number; temperature: number; dx?: number; dy?: number; components?: Component[] }
 export interface Snapshot {
-  version: 4 | 5 | 6; materialIds?: string[]; chemistry?: ChemistrySnapshot; experimentTitle?: string; experimentDescription?: string; width: number; height: number; cells: number[]; temperature: number[]; terrain: number[];
+  version: 4 | 5 | 6 | 7; materialIds?: string[]; chemistry?: ChemistrySnapshot; experimentTitle?: string; experimentDescription?: string; width: number; height: number; cells: number[]; temperature: number[]; terrain: number[];
   nodes: LabNode[]; nextId: number; viscosity: number[]; conductivity: number[]; trapped: Trapped[];
 }
-export const NODE_NAMES: Record<NodeKind,string> = {motor:'モーター',pin:'ピン',rect:'可動壁 · 矩形',circle:'可動壁 · 円',thermostat:'温度調整装置',pump:'ポンプ',valve:'バルブ',membrane:'選択膜'};
+export const NODE_NAMES: Record<NodeKind,string> = {motor:'モーター',pin:'ピン',rect:'可動壁 · 矩形',circle:'可動壁 · 円',thermostat:'温度調整装置',pump:'ポンプ',valve:'バルブ',membrane:'選択膜',processor:'循環装置'};
 const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
 export class Engine {
   cells = new Uint8Array(SIZE);
@@ -84,7 +90,7 @@ export class Engine {
   private randomState = 123456789;
   random() { let x=this.randomState; x^=x<<13; x^=x>>>17; x^=x<<5; this.randomState=x; return (x>>>0)/4294967296; }
   index(x: number,y: number) { return x>=0 && x<W && y>=0 && y<H ? Math.floor(y)*W+Math.floor(x) : -1; }
-  snapshot(): Snapshot { return {version:6,materialIds:[...MATERIAL_IDS],chemistry:this.chemistry.snapshot(),experimentTitle:this.experimentTitle,experimentDescription:this.experimentDescription,width:W,height:H,cells:Array.from(this.cells),temperature:Array.from(this.temperature),terrain:Array.from(this.terrain),nodes:structuredClone(this.nodes),nextId:this.nextId,viscosity:[...this.viscosity],conductivity:[...this.conductivity],trapped:structuredClone(this.trapped)}; }
+  snapshot(): Snapshot { return {version:7,materialIds:[...MATERIAL_IDS],chemistry:this.chemistry.snapshot(),experimentTitle:this.experimentTitle,experimentDescription:this.experimentDescription,width:W,height:H,cells:Array.from(this.cells),temperature:Array.from(this.temperature),terrain:Array.from(this.terrain),nodes:structuredClone(this.nodes),nextId:this.nextId,viscosity:[...this.viscosity],conductivity:[...this.conductivity],trapped:structuredClone(this.trapped)}; }
   restore(s: Snapshot) {this.experimentTitle=s.experimentTitle??'';this.experimentDescription=s.experimentDescription??''; this.cells.set(s.cells); this.chemistry.restore(s.chemistry); this.temperature.set(s.temperature); this.terrain.set(s.terrain); this.nodes=structuredClone(s.nodes); this.nextId=s.nextId; this.viscosity=[...s.viscosity]; this.conductivity=[...s.conductivity]; this.trapped=structuredClone(s.trapped); this.rasterize(); this.revision++;this.editEpoch++; }
   checkpoint() { this.editEpoch++;this.history.push(this.snapshot()); if(this.history.length>40) this.history.shift(); }
   undo() { const s=this.history.pop(); if(s) this.restore(s); return !!s; }
@@ -92,7 +98,7 @@ export class Engine {
   load(raw: string): boolean {
     try {
       const s=JSON.parse(raw);
-      if(![4,5,6].includes(s.version) || s.width!==W || s.height!==H) return false;
+      if(![4,5,6,7].includes(s.version) || s.width!==W || s.height!==H) return false;
       for(const key of ['experimentTitle','experimentDescription'])if(s[key]!==undefined&&(typeof s[key]!=='string'||s[key].length>300))return false;
       const remap=(m:number)=>s.version===4?(Number.isInteger(m)&&m>=0&&m<11?m:-1):MATERIAL_IDS.indexOf(s.materialIds?.[m]);
       if(s.version>=5&&(!Array.isArray(s.materialIds)||(s.materialIds.length<1||s.materialIds.length>MATERIALS.length||s.materialIds[0]!=='air')||new Set(s.materialIds).size!==s.materialIds.length||s.materialIds.some((id:string)=>!MATERIAL_IDS.includes(id))))return false;
@@ -113,14 +119,20 @@ export class Engine {
       if(!Array.isArray(s.nodes)||s.nodes.length>1000 || !finite(s.nextId)) return false;
       const ids=new Set<number>();
       for(const n of s.nodes) {
-        if(!Number.isSafeInteger(n.id)||n.id<1||ids.has(n.id)||!['motor','pin','rect','circle','thermostat','pump','valve','membrane'].includes(n.kind)||!['fixed','free','spring'].includes(n.joint)||typeof n.name!=='string'||n.name.length>100) return false;
+        if(!Number.isSafeInteger(n.id)||n.id<1||ids.has(n.id)||!['motor','pin','rect','circle','thermostat','pump','valve','membrane','processor'].includes(n.kind)||!['fixed','free','spring'].includes(n.joint)||typeof n.name!=='string'||n.name.length>100) return false;
         if(n.kind==='thermostat'&&(!finite(n.targetTemperature)||n.targetTemperature< -273||n.targetTemperature>2000||!finite(n.effectRadius)||n.effectRadius<1||n.effectRadius>40||typeof n.enabled!=='boolean'))return false;
-        if(['pump','valve','membrane'].includes(n.kind)){
+        if(['pump','valve','membrane','processor'].includes(n.kind)){
           if(!finite(n.flowRate)||n.flowRate<0||n.flowRate>10||!finite(n.portAngle)||n.portAngle<0||n.portAngle>360||!finite(n.portDistance)||n.portDistance<2||n.portDistance>30||!Number.isInteger(n.filterMaterial)||remap(n.filterMaterial)<0||typeof n.enabled!=='boolean')return false;
           if(n.transported!==undefined&&(!finite(n.transported)||n.transported<0)||n.deviceStatus!==undefined&&(typeof n.deviceStatus!=='string'||n.deviceStatus.length>100))return false;
           n.filterMaterial=remap(n.filterMaterial);
         }
         for(const [key,min,max] of [['anchorX',-2000,2000],['anchorY',-2000,2000],['jointOffset',-Math.PI,Math.PI],['jointVelocity',-100,100],['jointLimit',0,Math.PI],['stiffness',0,80],['damping',0,30]] as const)if(n[key]!==undefined&&(!finite(n[key])||n[key]<min||n[key]>max))return false;
+        if(n.kind==='processor'){
+          if(!Object.hasOwn(PROCESSES,n.process)||!finite(n.power)||n.power<0||n.power>100000)return false;
+          for(const key of ['energyUsed','heatRemoved'])if(!finite(n[key])||n[key]<0)return false;
+
+        }
+        if(n.customPorts){for(const key of ['input','output','aux']){const p=n.customPorts[key];if(!p||!finite(p.x)||!finite(p.y)||Math.abs(p.x)>2000||Math.abs(p.y)>2000)return false;}}
         ids.add(n.id);
         for(const k of ['lx','ly','la','width','height','radius','speed','amp','strokeAngle','t','direction','bounce']) if(!finite(n[k])) return false;
         if(Math.abs(n.lx)>2000||Math.abs(n.ly)>2000||n.width<1||n.width>W||n.height<1||n.height>H||n.radius<.5||n.radius>300||n.speed<0||n.speed>10||n.amp<0||n.amp>240||n.t<0||n.t>1||![-1,0,1].includes(n.direction)||![-1,1].includes(n.bounce)||!['rotation','piston'].includes(n.mode)||typeof n.repeat!=='boolean') return false;
@@ -244,7 +256,8 @@ export class Engine {
     if(kind==='motor') { const existing=this.nodes.find(n=>n.kind==='motor'&&Math.floor(poses.get(n.id)!.x)===Math.floor(x)&&Math.floor(poses.get(n.id)!.y)===Math.floor(y)); if(existing)return existing; }
     if(this.nodes.length>=1000)return null;
     const n:LabNode={id:this.nextId++,kind,name:NODE_NAMES[kind],parent:null,joint:'fixed',lx:x,ly:y,la:0,width,height,radius,mode:'rotation',direction:1,speed:1,amp:40,strokeAngle:Math.PI,t:0,bounce:1,repeat:true,blocked:false};
-    if(['pump','valve','membrane'].includes(kind)){n.flowRate=2;n.portAngle=0;n.portDistance=6;n.filterMaterial=kind==='membrane'?1:0;n.enabled=true;n.deviceStatus='待機中';n.transported=0;}
+    if(['pump','valve','membrane','processor'].includes(kind)){n.flowRate=2;n.portAngle=0;n.portDistance=6;n.filterMaterial=kind==='membrane'?1:0;n.enabled=true;n.deviceStatus='待機中';n.transported=0;}
+    if(kind==='processor'){n.name='電解槽';n.process='electrolysis';n.power=1200;n.energyUsed=0;n.heatRemoved=0;n.flowRate=1;}
     if(kind==='thermostat'){n.targetTemperature=100;n.effectRadius=12;n.enabled=true;}
     if(kind==='pin') {
       const parent=this.nodes.find(p=>p.kind==='motor'&&Math.floor(poses.get(p.id)!.x)===Math.floor(x)&&Math.floor(poses.get(p.id)!.y)===Math.floor(y))??[...this.nodes].reverse().find(p=>(p.kind==='rect'||p.kind==='circle')&&this.contains(p,poses.get(p.id)!,x,y));
@@ -256,11 +269,11 @@ export class Engine {
     const dx=x-p.x,dy=y-p.y,c=Math.cos(p.a),s=Math.sin(p.a),lx=c*dx+s*dy,ly=-s*dx+c*dy;
     return n.kind==='rect'?Math.abs(lx)<=n.width/2&&Math.abs(ly)<=n.height/2:n.kind==='circle'?dx*dx+dy*dy<=n.radius*n.radius:Math.hypot(dx,dy)<3;
   }
-  hit(x:number,y:number):LabNode|undefined { const poses=this.poses(); return [...this.nodes].reverse().filter(n=>n.kind==='pin'||n.kind==='motor'||n.kind==='thermostat'||n.kind==='pump'||n.kind==='valve'||n.kind==='membrane').find(n=>this.contains(n,poses.get(n.id)!,x,y))??[...this.nodes].reverse().find(n=>this.contains(n,poses.get(n.id)!,x,y)); }
+  hit(x:number,y:number):LabNode|undefined { const poses=this.poses(); return [...this.nodes].reverse().filter(n=>n.kind==='pin'||n.kind==='motor'||n.kind==='thermostat'||n.kind==='pump'||n.kind==='valve'||n.kind==='membrane'||n.kind==='processor').find(n=>this.contains(n,poses.get(n.id)!,x,y))??[...this.nodes].reverse().find(n=>this.contains(n,poses.get(n.id)!,x,y)); }
   shapeCells(n:LabNode,p:Pose,fn:(i:number,x:number,y:number)=>void) {
     if(n.kind==='valve'&&!n.enabled){const a=p.a+(n.portAngle??0)*Math.PI/180;for(let k=-3;k<=3;k++)for(let offset=-1;offset<=1;offset++){const x=Math.floor(p.x-Math.sin(a)*k+Math.cos(a)*offset),y=Math.floor(p.y+Math.cos(a)*k+Math.sin(a)*offset),i=this.index(x,y);if(i>=0)fn(i,x,y);}return;}
     if(n.kind==='motor') {const i=this.index(p.x,p.y);if(i>=0)fn(i,Math.floor(p.x),Math.floor(p.y));return;}
-    if(n.kind==='pin'||n.kind==='thermostat'||n.kind==='pump'||n.kind==='valve'||n.kind==='membrane')return;
+    if(n.kind==='pin'||n.kind==='thermostat'||n.kind==='pump'||n.kind==='valve'||n.kind==='membrane'||n.kind==='processor')return;
     const cos=Math.cos(p.a),sin=Math.sin(p.a),c=Math.abs(cos),s=Math.abs(sin);
     const rx=n.kind==='circle'?n.radius:(c*n.width+s*n.height)/2,ry=n.kind==='circle'?n.radius:(s*n.width+c*n.height)/2;
     for(let y=Math.max(0,Math.floor(p.y-ry));y<=Math.min(H-1,Math.ceil(p.y+ry));y++)for(let x=Math.max(0,Math.floor(p.x-rx));x<=Math.min(W-1,Math.ceil(p.x+rx));x++) {const dx=x+.5-p.x,dy=y+.5-p.y;if(n.kind==='circle'?dx*dx+dy*dy<=n.radius*n.radius:Math.abs(cos*dx+sin*dy)<=n.width/2&&Math.abs(-sin*dx+cos*dy)<=n.height/2)fn(y*W+x,x,y);}
@@ -317,9 +330,9 @@ export class Engine {
     for(let py=Math.max(0,Math.floor(y-r));py<=Math.min(H-1,Math.ceil(y+r));py++)for(let px=Math.max(0,Math.floor(x-r));px<=Math.min(W-1,Math.ceil(x+r));px++){
       if((px-x)**2+(py-y)**2>r*r)continue; const i=py*W+px;
       if(erase) {this.chemistry.reset(i);this.cells[i]=0;this.terrain[i]=0;this.temperature[i]=20;}
-      else if(!this.occupancy[i]&&(overwrite||this.terrain[i]===0)) {if(overwrite)this.terrain[i]=0;this.cells[i]=material;this.chemistry.reset(i);this.temperature[i]=MATERIALS[material].temperature;}
+      else if(!this.occupancy[i]&&(overwrite||this.terrain[i]===0)) {if(overwrite)this.terrain[i]=0;this.cells[i]=material;this.chemistry.reset(i);this.temperature[i]=MATERIALS[material].temperature;if(material===0)this.chemistry.write(i,[{material:19,amount:.77},{material:17,amount:.23}],20);}
     }
-    if(erase){const poses=this.poses();this.delete(new Set(this.nodes.filter(n=>(n.kind==='motor'||n.kind==='pin'||n.kind==='thermostat'||n.kind==='pump'||n.kind==='valve'||n.kind==='membrane')&&Math.hypot(poses.get(n.id)!.x-x,poses.get(n.id)!.y-y)<=r).map(n=>n.id)));}
+    if(erase){const poses=this.poses();this.delete(new Set(this.nodes.filter(n=>(n.kind==='motor'||n.kind==='pin'||n.kind==='thermostat'||n.kind==='pump'||n.kind==='valve'||n.kind==='membrane'||n.kind==='processor')&&Math.hypot(poses.get(n.id)!.x-x,poses.get(n.id)!.y-y)<=r).map(n=>n.id)));}
   }
   terrainShape(x0:number,y0:number,x1:number,y1:number,type:1|2,circle=false) {
     const radius=Math.hypot(x1-x0,y1-y0);
@@ -371,7 +384,7 @@ export class Engine {
       }
     }
   }
-  devicePorts(n:LabNode,poses=this.poses()){const p=poses.get(n.id)!,a=p.a+(n.portAngle??0)*Math.PI/180,d=n.portDistance??6;return {input:{x:p.x-Math.cos(a)*d,y:p.y-Math.sin(a)*d},output:{x:p.x+Math.cos(a)*d,y:p.y+Math.sin(a)*d}};}
+  devicePorts(n:LabNode,poses=this.poses()){const p=poses.get(n.id)!;if(n.customPorts){const point=(v:{x:number;y:number})=>({x:p.x+Math.cos(p.a)*v.x-Math.sin(p.a)*v.y,y:p.y+Math.sin(p.a)*v.x+Math.cos(p.a)*v.y});return {input:point(n.customPorts.input),output:point(n.customPorts.output)};}const a=p.a+(n.portAngle??0)*Math.PI/180,d=n.portDistance??6;return {input:{x:p.x-Math.cos(a)*d,y:p.y-Math.sin(a)*d},output:{x:p.x+Math.cos(a)*d,y:p.y+Math.sin(a)*d}};}
   private runDevices(dt:number){
     const poses=this.poses();
     for(const n of this.nodes.filter(n=>['pump','valve','membrane'].includes(n.kind))){
@@ -386,6 +399,7 @@ export class Engine {
       const q=this.chemistry.transfer(i,j,(n.flowRate??2)*dt,n.kind==='membrane'?(n.filterMaterial??1):0);
       n.deviceStatus=q>0?'移送中':'出口満杯・成分非対応';n.transported=(n.transported??0)+q;
     }
+    runProcesses(this,dt,poses);
   }
   private applyThermostats() {
     const devices=this.nodes.filter(n=>n.kind==='thermostat'&&n.enabled);
@@ -490,12 +504,13 @@ export class Engine {
   totalMass(){let mass=this.trapped.reduce((s,p)=>s+(p.components?.reduce((t,c)=>t+c.amount,0)??1),0);for(let i=0;i<SIZE;i++)mass+=this.chemistry.mass(i);return mass;}
   count() {let count=this.trapped.length;for(let i=0;i<SIZE;i++)if(this.cells[i])count++;return count;}
   experiment(kind:string){
+    if(['cycles','hydrogen-cycle','crystal-cycle','extraction-cycle'].includes(kind)){buildCycles(this,kind);return;}
     this.clear();
     const wall=(x:number,y:number,x1:number,y1:number)=>this.terrainShape(x,y,x1,y1,1);
     const tank=(left:number,right:number,top=110,bottom=190)=>{wall(left,top,left+1,bottom);wall(right-1,top,right,bottom);wall(left,bottom,right,bottom+1);};
     const fill=(x:number,y:number,x1:number,y1:number,parts:Component[],temperature=20)=>{for(let py=y;py<y1;py++)for(let px=x;px<x1;px++){const i=this.index(px,py);if(i>=0&&!this.terrain[i])this.chemistry.write(i,parts,temperature);}};
     if(kind==='dissolve'){
-      this.experimentTitle='溶解 → 加熱 → 冷却析出';this.experimentDescription='左は水と結晶粉A。攪拌・加熱で溶解。右は温かい溶液を冷やし、結晶を回収します。装置を選んで温度を変更できます。';
+      this.experimentTitle='溶解 → 加熱 → 冷却析出';this.experimentDescription='左は水と晶塩。攪拌・加熱で溶解。右は温かい溶液を冷やし、結晶を回収します。装置を選んで温度を変更できます。';
       tank(84,158);tank(211,285);
       fill(86,154,157,190,[{material:1,amount:1}]);fill(105,148,140,154,[{material:11,amount:1}]);
       fill(213,153,284,185,[{material:1,amount:.78},{material:11,amount:.22}],85);
@@ -504,17 +519,17 @@ export class Engine {
       const motor=this.add('motor',121,166)!;motor.name='溶解槽の攪拌';motor.speed=.5;
       const paddle=this.add('rect',121,166,48,3)!;this.reparent(paddle.id,motor.id);
     }else if(kind==='distill'){
-      this.experimentTitle='水 + 揮発液B → 蒸留・凝縮';this.experimentDescription='左を95°Cに保ち、Bだけを蒸発。ポンプが蒸気を右へ運び、冷却して液体Bを回収します。成分表示で分離を観察できます。';
+      this.experimentTitle='水 + 揮発溶媒 → 蒸留・凝縮';this.experimentDescription='左を95°Cに保ち、溶媒だけを蒸発。ポンプが蒸気を右へ運び、冷却して液体溶媒を回収します。成分表示で分離を観察できます。';
       tank(84,160,114);tank(215,287,114);wall(84,113,160,114);wall(215,113,287,114);
       fill(86,153,159,189,[{material:1,amount:.5},{material:12,amount:.5}],45);
       const hot=this.add('thermostat',123,170)!;hot.name='蒸留槽 · 95°C';hot.targetTemperature=95;hot.effectRadius=40;
       const cold=this.add('thermostat',250,135)!;cold.name='凝縮槽 · 15°C';cold.targetTemperature=15;cold.effectRadius=39;
       const pump=this.add('pump',187.5,119.5)!;pump.name='蒸気移送ポンプ';pump.portDistance=30;pump.flowRate=10;
     }else{
-      this.experimentTitle='A + D → 沈殿E → 選択膜で回収';this.experimentDescription='左でAとDが反応し、重い沈殿Eが生成。選択膜はEだけを右へ回収します。入口の位置や通過成分を変えて試してください。';
+      this.experimentTitle='晶塩 + 活性剤 → 複合結晶 → 選択膜で回収';this.experimentDescription='左で晶塩と活性剤が反応し、重い複合結晶が生成。選択膜は複合結晶だけを右へ回収します。入口の位置や通過成分を変えて試してください。';
       tank(84,183);tank(236,287);
       fill(86,152,181,187,[{material:1,amount:.8},{material:11,amount:.1},{material:15,amount:.1}],55);
-      const membrane=this.add('membrane',210.5,188.5)!;membrane.name='E回収用の選択膜';membrane.portDistance=30;membrane.filterMaterial=16;membrane.flowRate=8;
+      const membrane=this.add('membrane',210.5,188.5)!;membrane.name='結晶回収用の選択膜';membrane.portDistance=30;membrane.filterMaterial=16;membrane.flowRate=8;
       const valve=this.add('valve',262.5,160.5)!;valve.name='回収槽のバルブ';valve.portAngle=90;valve.portDistance=8;valve.flowRate=4;
     }
     this.rasterize();this.tick=0;this.revision++;this.editEpoch++;
@@ -532,7 +547,7 @@ export class Engine {
     const arm=this.add('rect',141,162,18,3)!;arm.name='合成槽の固定アーム';this.reparent(arm.id,mixer.id);
     const paddle=this.add('rect',159,162,18,3)!;paddle.name='合成槽のばねパドル';this.reparent(paddle.id,arm.id);this.setJoint(paddle.id,'spring');mixer.la=-.8;this.terrainShape(164,160,165,164,2);
     const heat=this.add('thermostat',109,172)!;heat.name='合成槽の温度調整';heat.targetTemperature=55;heat.effectRadius=28;
-    this.rasterize();this.experimentTitle='合成・分離 × 関節実験';this.experimentDescription='上段：固定アームと自由／ばね関節を比較。下段：ばねパドルと温度装置で攪拌・保温し、水中のAとDから沈殿Eを合成。選択膜で右へ回収。見本メニューには蒸留・析出・従来の物理もあります。';}
+    this.rasterize();this.experimentTitle='合成・分離 × 関節実験';this.experimentDescription='上段：固定アームと自由／ばね関節を比較。下段：ばねパドルと温度装置で攪拌・保温し、水中の晶塩と活性剤から複合結晶を合成。選択膜で右へ回収。見本メニューには蒸留・析出・従来の物理もあります。';}
   physicsDemo() {
     this.clear();
     const wall=(a:number,b:number,c:number,d:number)=>this.terrainShape(a,b,c,d,1);

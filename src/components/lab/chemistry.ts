@@ -1,21 +1,22 @@
 import { MATERIALS, MATERIAL_IDS, SIZE, W, H, clamp, type Engine } from './engine';
 
+export interface ReactionPort {index:number;material:number;ratio:number}
 export type Component = { material: number; amount: number };
 export interface ChemistrySnapshot { amount: number[]; secondary: number[]; secondaryAmount: number[]; tertiary: number[]; tertiaryAmount: number[] }
 const EPS=1e-8;
-export const REACTIONS=[{id:'precipitate-ad',name:'沈殿反応',inputs:'結晶粉A + 反応粉D',outputs:'沈殿E',ratio:'A 1 + D 1 → E 2',temperature:'5〜180°C',heat:20,reactants:[{id:'crystal-a',ratio:1},{id:'reagent-d',ratio:1}],product:'precipitate-e',yield:2,minTemperature:5,maxTemperature:180,rate:.015}];
+export const REACTIONS=[{id:'precipitate-ad',name:'沈殿反応',inputs:'晶塩 + 活性剤',outputs:'複合結晶',ratio:'晶塩 1 + 活性剤 1 → 複合結晶 2',temperature:'5〜180°C',heat:20,reactants:[{id:'crystal-a',ratio:1},{id:'reagent-d',ratio:1}],product:'precipitate-e',yield:2,minTemperature:5,maxTemperature:180,rate:.015}];
 export const SOLUBILITY_RULES=[{solute:'crystal-a',solvent:'water',base:.06,slope:.004,max:.6},{solute:'reagent-d',solvent:'water',base:.35,slope:0,max:.35}];
-export const MISCIBLE_GROUPS=[['water','solvent-b','crystal-a','reagent-d']];
+export const MISCIBLE_GROUPS=[['water','solvent-b','crystal-a','reagent-d'],['heavy-c','crystal-a'],['hydrogen','oxygen','nitrogen','carbon-dioxide','steam']];
 export const PHASE_RULES:{from:string;to:string;threshold:number;heating:boolean}[]=[
   {from:'water',to:'steam',threshold:100,heating:true},{from:'water',to:'ice',threshold:0,heating:false},
   {from:'steam',to:'water',threshold:95,heating:false},{from:'ice',to:'water',threshold:1,heating:true},
   {from:'mercury',to:'mercury-vapor',threshold:357,heating:true},{from:'mercury-vapor',to:'mercury',threshold:340,heating:false},
   {from:'lava',to:'rock',threshold:700,heating:false},{from:'rock',to:'lava',threshold:900,heating:true},
-  {from:'oil',to:'smoke',threshold:300,heating:true},{from:'solvent-b',to:'solvent-b-vapor',threshold:65,heating:true},
+  {from:'solvent-b',to:'solvent-b-vapor',threshold:65,heating:true},
   {from:'solvent-b-vapor',to:'solvent-b',threshold:55,heating:false},
 ];
 // Model formation energies give each phase a latent-heat offset, in internal units per unit mass.
-const FORMATION:Record<string,number>={ice:-40,steam:310,'mercury-vapor':24.3,lava:-160,smoke:360,'solvent-b-vapor':125};
+const FORMATION:Record<string,number>={ice:-40,steam:310,'mercury-vapor':24.3,lava:-160,hydrogen:10800,oil:1800,smoke:1200,'precipitate-e':-10,'solvent-b-vapor':125};
 export const formation=(m:number)=>FORMATION[MATERIALS[m].id]??0;
 export const saturation=(temperature:number)=>{const rule=SOLUBILITY_RULES[0];return clamp(rule.base+Math.max(0,temperature)*rule.slope,rule.base,rule.max);};
 export class Chemistry {
@@ -25,6 +26,7 @@ export class Chemistry {
   tertiary=new Uint8Array(SIZE);
   tertiaryAmount=new Float32Array(SIZE);
   status='';
+  flame=new Uint8Array(SIZE);
   private phaseRules=PHASE_RULES.map(r=>({...r,from:MATERIAL_IDS.indexOf(r.from),to:MATERIAL_IDS.indexOf(r.to)}));
   private phaseIndex=new Map<number,typeof this.phaseRules>();
   private solubilityRules=SOLUBILITY_RULES.map(r=>({...r,solute:MATERIAL_IDS.indexOf(r.solute),solvent:MATERIAL_IDS.indexOf(r.solvent)}));
@@ -34,7 +36,7 @@ export class Chemistry {
   private solvents=[...new Set([...this.solubilityRules.map(r=>r.solvent),...this.miscibleGroups.flat().filter(m=>MATERIALS[m].phase==='liquid')])];
   private contactMaterials=new Set([...this.solubilityRules.map(r=>r.solute),...this.miscibleGroups.flat().filter(m=>m!==1)]);
   constructor(private e:Engine){for(const rule of this.reactionRules){if(rule.product<1||rule.reactants.some(p=>p.material<1||p.ratio<=0)||Math.abs(rule.reactants.reduce((sum,p)=>sum+p.ratio,0)-rule.yield)>1e-8)throw new Error('反応定義の物質ID・保存則が不正');}for(const rule of this.phaseRules){const group=this.phaseIndex.get(rule.from)??[];group.push(rule);this.phaseIndex.set(rule.from,group);}}
-  clear(){this.amount.fill(1);this.secondary.fill(0);this.secondaryAmount.fill(0);this.tertiary.fill(0);this.tertiaryAmount.fill(0);}
+  clear(){this.amount.fill(1);this.secondary.fill(0);this.secondaryAmount.fill(0);this.tertiary.fill(0);this.tertiaryAmount.fill(0);this.flame.fill(0);}
   reset(i:number){this.amount[i]=1;this.secondary[i]=this.tertiary[i]=0;this.secondaryAmount[i]=this.tertiaryAmount[i]=0;}
   components(i:number):Component[]{if(!this.e.cells[i])return [];const out=[{material:this.e.cells[i],amount:this.amount[i]}];if(this.secondary[i])out.push({material:this.secondary[i],amount:this.secondaryAmount[i]});if(this.tertiary[i])out.push({material:this.tertiary[i],amount:this.tertiaryAmount[i]});return out;}
   mass(i:number){return this.e.cells[i]?this.amount[i]+this.secondaryAmount[i]+this.tertiaryAmount[i]:0;}
@@ -74,6 +76,40 @@ export class Chemistry {
     this.write(j,combined,this.temperatureFor(combined,eDest));this.write(i,remaining,sourceTemp);return quantity;
   }
   compatible(parts:Component[]){const ids=parts.filter(p=>p.amount>EPS).map(p=>p.material);return this.miscibleGroups.some(group=>ids.every(m=>group.includes(m)))||ids.every(m=>m===ids[0]);}
+  /** Commit all ports together: blocked products never consume only part of the inputs. */
+  react(inputs:ReactionPort[],outputs:ReactionPort[],limit:number,externalPerUnit=0){
+    if(!inputs.length||!outputs.length||limit<=EPS||!Number.isFinite(externalPerUnit))return 0;
+    const consumed=new Map<string,ReactionPort>(),produced=new Map<string,ReactionPort>();
+    for(const [ports,map] of [[inputs,consumed],[outputs,produced]] as const)for(const p of ports){if(!this.free(p.index)||p.material<=0||p.material>=MATERIALS.length||p.ratio<=0)return 0;const key=`${p.index}:${p.material}`,old=map.get(key);map.set(key,{...p,ratio:p.ratio+(old?.ratio??0)});}
+    const ins=[...consumed.values()],outs=[...produced.values()],inMass=ins.reduce((sum,p)=>sum+p.ratio,0),outMass=outs.reduce((sum,p)=>sum+p.ratio,0);
+    if(Math.abs(inMass-outMass)>1e-6)throw new Error('反応の質量収支が不正');
+    let q=limit;for(const p of ins)q=Math.min(q,this.quantity(p.index,p.material)/p.ratio);
+    const indexes=new Set([...ins,...outs].map(p=>p.index));
+    for(const index of indexes){const change=outs.filter(p=>p.index===index).reduce((s,p)=>s+p.ratio,0)-ins.filter(p=>p.index===index).reduce((s,p)=>s+p.ratio,0);if(change>0)q=Math.min(q,Math.max(0,1-this.mass(index))/change);}
+    if(q<EPS)return 0;
+    let released=externalPerUnit*q;for(const p of ins)released+=this.energyOf([{material:p.material,amount:p.ratio*q}],this.e.temperature[p.index]);
+    const products=outs.map(p=>({material:p.material,amount:p.ratio*q})),temperature=this.temperatureFor(products,released);
+    if(!Number.isFinite(temperature)||temperature< -273||temperature>5000)return 0;
+    const patches:{index:number;parts:Component[];temperature:number}[]=[];
+    for(const index of indexes){let energy=this.energy(index);const parts=this.components(index);
+      for(const p of ins.filter(p=>p.index===index)){const item=parts.find(c=>c.material===p.material)!;item.amount-=p.ratio*q;energy-=this.energyOf([{material:p.material,amount:p.ratio*q}],this.e.temperature[index]);}
+      const packet=outs.filter(p=>p.index===index).map(p=>({material:p.material,amount:p.ratio*q}));
+      const remaining=this.merge(parts);if(packet.length&&remaining.length&&!this.compatible([...remaining,...packet]))return 0;
+      const merged=this.merge([...remaining,...packet]);if(merged.length>3||merged.reduce((sum,p)=>sum+p.amount,0)>1.00001)return 0;
+      energy+=this.energyOf(packet,temperature);const t=this.temperatureFor(merged,energy);if(t< -273||t>5000)return 0;patches.push({index,parts:merged,temperature:t});
+    }
+    for(const p of patches)this.write(p.index,p.parts,p.temperature);return q;
+  }
+  private burn(sources:{index:number;material:number}[]){
+    for(const {index,material} of sources){if(!this.free(index)||this.quantity(index,material)<EPS||this.e.temperature[index]<(material===9?350:material===2?280:450))continue;
+      const oxygen=[index,...this.neighbours(index)].find(j=>this.free(j)&&this.quantity(j,17)>EPS);if(oxygen===undefined)continue;
+      const complete=material!==2||this.quantity(oxygen,17)>=this.quantity(index,2)*24/7;
+      const ratios=material===9?{fuel:1,oxygen:8,products:[{material:7,ratio:9}]}:material===8?{fuel:3,oxygen:8,products:[{material:18,ratio:11}]}:complete?{fuel:7,oxygen:24,products:[{material:18,ratio:22},{material:7,ratio:9}]}:{fuel:7,oxygen:8,products:[{material:8,ratio:6},{material:7,ratio:9}]};
+      const candidates=[...this.neighbours(index),...this.neighbours(oxygen)];const used=new Set<number>([index,oxygen]);const outs:ReactionPort[]=[];
+      for(const product of ratios.products){const j=candidates.find(j=>!used.has(j)&&this.free(j)&&this.mass(j)<.99999&&(!this.e.cells[j]||this.compatible([...this.components(j),{material:product.material,amount:.01}])));if(j===undefined){outs.length=0;break;}used.add(j);outs.push({...product,index:j});}
+      if(outs.length&&this.react([{index,material,ratio:ratios.fuel},{index:oxygen,material:17,ratio:ratios.oxygen}],outs,.015/ratios.fuel)>0)this.flame[index]=8;
+    }
+  }
   private solution(i:number){return this.solvents.some(m=>this.quantity(i,m)>EPS);}
   private dissolve(solid:number,liquid:number){
     const m=this.e.cells[solid],rule=this.solubilityRules.find(r=>r.solute===m);if(!rule||!this.solution(liquid)||!this.free(solid)||!this.free(liquid))return;
@@ -152,25 +188,18 @@ export class Chemistry {
   }
 
   step(){
+    const fuels:{index:number;material:number}[]=[];for(let i=0;i<SIZE;i++){if(this.flame[i])this.flame[i]--;const m=this.e.cells[i],s=this.secondary[i],t=this.tertiary[i];if(m===2||m===8||m===9)fuels.push({index:i,material:m});if(s===2||s===8||s===9)fuels.push({index:i,material:s});if(t===2||t===8||t===9)fuels.push({index:i,material:t});}
     const pairs:[number,number][]=[];
     // Only special substances or mixed cells need chemical contact checks.
-    for(let i=0;i<SIZE;i++)if(this.contactMaterials.has(this.e.cells[i])||this.secondary[i])for(const j of this.neighbours(i))if(this.e.cells[j]&&(i<j||this.e.cells[j]<11&&!this.secondary[j]))pairs.push([i,j]);
+    for(let i=0;i<SIZE;i++)if(this.contactMaterials.has(this.e.cells[i])&&MATERIALS[this.e.cells[i]].phase!=='gas'||this.secondary[i]&&MATERIALS[this.e.cells[i]].phase==='liquid')for(const j of this.neighbours(i))if(this.e.cells[j]&&(i<j||this.e.cells[j]<11&&!this.secondary[j]))pairs.push([i,j]);
     for(const [i,j] of pairs){this.dissolve(i,j);this.dissolve(j,i);this.diffuse(i,j);}
     const sources:number[]=[];for(let i=0;i<SIZE;i++)if(this.secondary[i]||this.reactiveMaterials.has(this.e.cells[i]))sources.push(i);
     for(const i of sources){
       const temp=this.e.temperature[i];
       for(const rule of this.reactionRules){
         if(temp<rule.minTemperature||temp>rule.maxTemperature)continue;
-        const available=Math.min(...rule.reactants.map(p=>this.quantity(i,p.material)/p.ratio));
-        if(available<EPS)continue;
-        const j=this.destination(i,rule.product),q=j<0?0:Math.min(available,rule.rate,(1-this.mass(j))/rule.yield);
-        if(q>EPS){
-          const parts=this.components(i).map(p=>({material:p.material,amount:p.amount-(rule.reactants.find(r=>r.material===p.material)?.ratio??0)*q}));
-          const packet=[{material:rule.product,amount:q*rule.yield}],out=this.merge([...this.components(j),...packet]);
-          const productEnergy=this.energyOf(packet,temp),sourceEnergy=this.energy(i)-productEnergy+q*rule.heat,destEnergy=this.energy(j)+productEnergy;
-          if(parts.reduce((sum,p)=>sum+Math.max(0,p.amount),0)>EPS){this.write(i,parts,this.temperatureFor(parts,sourceEnergy));this.write(j,out,this.temperatureFor(out,destEnergy));}
-          else{this.write(i,[]);this.write(j,out,this.temperatureFor(out,destEnergy+sourceEnergy));}
-        }
+        const j=this.destination(i,rule.product);if(j>=0)this.react(rule.reactants.map(p=>({index:i,material:p.material,ratio:p.ratio})),[{index:j,material:rule.product,ratio:rule.yield}],rule.rate);
+
       }
       for(const rule of this.solubilityRules){
         const solvent=this.quantity(i,rule.solvent),limit=clamp(rule.base+Math.max(0,this.e.temperature[i])*rule.slope,rule.base,rule.max);
@@ -178,5 +207,6 @@ export class Chemistry {
         if(solvent>EPS&&MATERIALS[this.e.cells[i]].phase==='liquid'&&excess>EPS)this.emit(i,rule.solute,rule.solute,Math.min(.025,excess),this.e.temperature[i]);
       }
     }
+    this.burn(fuels);
   }
 }

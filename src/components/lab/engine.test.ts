@@ -16,7 +16,7 @@ describe('cell fluid simulation',()=>{
     for(let i=0;i<25;i++)e.step();expect(averageY(e,9)).toBeLessThan(110);for(const i of rock)expect(e.cells[i]).toBe(6);
   });
   it('phase changes preserve mass and thermal energy and respect hysteresis',()=>{
-    for(const [material,temperature,product] of [[1,110,7],[1,-10,4],[7,80,1],[4,10,1],[3,380,10],[10,300,3],[5,600,6],[6,1000,5],[2,350,8]]){
+    for(const [material,temperature,product] of [[1,110,7],[1,-10,4],[7,80,1],[4,10,1],[3,380,10],[10,300,3],[5,600,6],[6,1000,5]]){
       const e=new Engine(),i=e.index(100,100);e.cells[i]=material;e.temperature[i]=temperature;
       const before=e.chemistry.energy(i);e.chemistry.phaseChanges();
       expect(e.totalMass()).toBeCloseTo(1,5);let energy=0,produced=0;for(let j=0;j<SIZE;j++){energy+=e.chemistry.energy(j);produced+=e.chemistry.quantity(j,product);}

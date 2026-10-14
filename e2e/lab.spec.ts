@@ -74,3 +74,22 @@ test('places an adjustable temperature controller, heats/cools, saves and undoes
   await expect(page.getByLabel('目標温度',{exact:true})).toHaveValue('200');await expect(page.getByLabel('影響半径',{exact:true})).toHaveValue('8');
   await page.keyboard.press('Delete');s=await saveState(page);expect(s.nodes).toHaveLength(0);await page.keyboard.press('Control+z');s=await saveState(page);expect(s.nodes[0].kind).toBe('thermostat');
 });
+
+test('chemistry experiments expose composition and configurable separation devices',async({page})=>{
+  const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));await page.goto('/');
+  await page.getByRole('button',{name:'停止 Space',exact:true}).click();
+  await page.getByLabel('実験見本').selectOption('reaction');await page.getByRole('button',{name:'見本',exact:true}).click();
+  await expect(page.getByText('A + D → 沈殿E → 選択膜で回収',{exact:true})).toBeVisible();
+  let s=await saveState(page);expect(s.version).toBe(5);expect(s.materialIds).toContain('precipitate-e');expect(s.chemistry.secondaryAmount.some((n:number)=>n>0)).toBe(true);
+  await page.getByLabel('観察モード').selectOption('component');await page.getByLabel('観察成分').selectOption('11');
+  await page.getByRole('button',{name:'E回収用の選択膜',exact:true}).click();
+  await page.getByLabel('通過成分').selectOption('1');await page.getByLabel('流量',{exact:true}).fill('3.5');await page.getByLabel('流量',{exact:true}).blur();
+  s=await saveState(page);const membrane=s.nodes.find((n:any)=>n.kind==='membrane');expect(membrane.filterMaterial).toBe(1);expect(membrane.flowRate).toBe(3.5);
+  await page.getByLabel('観察モード').selectOption('flow');await page.getByRole('button',{name:'再生 Space',exact:true}).click();
+  await expect(page.locator('.status-right')).toContainText(/0\.[1-9] s|[1-9]\d*\.\d s/);await page.getByRole('button',{name:'停止 Space',exact:true}).click();
+  s=await saveState(page);const product=s.cells.reduce((sum:number,m:number,i:number)=>sum+(m===16?s.chemistry.amount[i]:0)+(s.chemistry.secondary[i]===16?s.chemistry.secondaryAmount[i]:0),0);expect(product).toBeGreaterThan(0);
+  await page.screenshot({path:'test-results/chemistry-reaction.png'});
+  await page.reload();await page.getByRole('button',{name:'停止 Space',exact:true}).click();await page.getByRole('button',{name:'E回収用の選択膜',exact:true}).click();await expect(page.getByLabel('通過成分')).toHaveValue('1');
+  for(const example of ['dissolve','distill']){await page.getByLabel('実験見本').selectOption(example);await page.getByRole('button',{name:'見本',exact:true}).click();s=await saveState(page);expect(s.chemistry.amount).toHaveLength(89600);expect(s.nodes.length).toBeGreaterThan(0);}
+  await page.screenshot({path:'test-results/chemistry-distill.png'});expect(errors).toEqual([]);
+});

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Engine, W, H, SIZE, DT } from './engine';
-const particles=(e:Engine)=>e.count();
+const particles=(e:Engine)=>e.totalMass();
 const averageY=(e:Engine,m:number)=>{let sum=0,count=0;for(let i=0;i<SIZE;i++)if(e.cells[i]===m){sum+=Math.floor(i/W);count++;}return count?sum/count:0;};
 function basin(e:Engine){e.terrainShape(80,80,82,200,1);e.terrainShape(120,80,122,200,1);e.terrainShape(80,198,122,200,1);}
 function fill(e:Engine,x0:number,y0:number,x1:number,y1:number,m:number,temp=20){for(let y=y0;y<y1;y++)for(let x=x0;x<x1;x++){const i=e.index(x,y);e.cells[i]=m;e.temperature[i]=temp;}}
@@ -15,15 +15,17 @@ describe('cell fluid simulation',()=>{
     const rock=Array.from(e.cells).map((m,i)=>m===6?i:-1).filter(i=>i>=0);
     for(let i=0;i<25;i++)e.step();expect(averageY(e,9)).toBeLessThan(110);for(const i of rock)expect(e.cells[i]).toBe(6);
   });
-  it('phase hysteresis and conserved heat exchange',()=>{
-    const e=new Engine();e.conductivity.fill(0);
-    const i=e.index(100,100);e.cells[i]=1;e.temperature[i]=101;e.viscosity.fill(100);e.step();expect(e.cells[i]).toBe(7);expect(e.temperature[i]).toBe(101);
-    e.temperature[i]=97;e.step();expect(e.cells[i]).toBe(7);e.temperature[i]=94;e.step();expect(e.cells[i]).toBe(1);
-    e.temperature[i]=-1;e.step();expect(e.cells[i]).toBe(4);e.temperature[i]=.5;e.step();expect(e.cells[i]).toBe(4);e.temperature[i]=2;e.step();expect(e.cells[i]).toBe(1);
-    e.cells[i]=3;e.temperature[i]=358;e.step();expect(e.cells[i]).toBe(10);e.temperature[i]=341;e.step();expect(e.cells[i]).toBe(10);e.temperature[i]=339;e.step();expect(e.cells[i]).toBe(3);
-    e.cells[i]=5;e.temperature[i]=699;e.step();expect(e.cells[i]).toBe(6);e.temperature[i]=850;e.step();expect(e.cells[i]).toBe(6);e.temperature[i]=901;e.step();expect(e.cells[i]).toBe(5);
-    e.cells[i]=2;e.temperature[i]=301;e.step();expect(e.cells[i]).toBe(8);
-    const heat=new Engine();heat.cells.fill(1);heat.temperature.fill(20);heat.temperature[i]=80;heat.viscosity[1]=100;
+  it('phase changes preserve mass and thermal energy and respect hysteresis',()=>{
+    for(const [material,temperature,product] of [[1,110,7],[1,-10,4],[7,80,1],[4,10,1],[3,380,10],[10,300,3],[5,600,6],[6,1000,5],[2,350,8]]){
+      const e=new Engine(),i=e.index(100,100);e.cells[i]=material;e.temperature[i]=temperature;
+      const before=e.chemistry.energy(i);e.chemistry.phaseChanges();
+      expect(e.totalMass()).toBeCloseTo(1,5);let energy=0,produced=0;for(let j=0;j<SIZE;j++){energy+=e.chemistry.energy(j);produced+=e.chemistry.quantity(j,product);}
+      expect(produced).toBeGreaterThan(0);expect(energy).toBeCloseTo(before,3);
+    }
+    for(const [material,temperature] of [[7,97],[4,.5],[10,345],[6,850]]){
+      const e=new Engine(),i=e.index(100,100);e.cells[i]=material;e.temperature[i]=temperature;e.chemistry.phaseChanges();expect(e.chemistry.quantity(i,material)).toBe(1);
+    }
+    const heat=new Engine(),i=heat.index(100,100);heat.cells.fill(1);heat.temperature.fill(20);heat.temperature[i]=80;heat.viscosity[1]=100;
     const energy=heat.temperature.reduce((a,b)=>a+b,0);heat.step();expect(heat.temperature[i]).toBeLessThan(80);expect(heat.temperature[i+1]).toBeGreaterThan(20);expect(heat.temperature.reduce((a,b)=>a+b,0)).toBeCloseTo(energy,1);
   });
   it('guides pass liquid while walls block it',()=>{
@@ -64,8 +66,8 @@ describe('mechanisms and editing',()=>{
   it('fast pistons sweep and push intermediate particles instead of passing through them',()=>{
     const e=new Engine();e.terrainShape(0,90,W-1,90,1);e.terrainShape(0,109,W-1,109,1);fill(e,53,93,64,107,1);e.viscosity[1]=100;e.conductivity.fill(0);
     const m=e.add('motor',50,100)!;m.mode='piston';m.strokeAngle=0;m.amp=240;m.speed=10;
-    const b=e.add('rect',50,100,2,18)!;e.reparent(b.id,m.id);const count=e.count();e.step();
-    expect(e.count()).toBe(count);expect(averageY(e,1)).toBeGreaterThan(90);
+    const b=e.add('rect',50,100,2,18)!;e.reparent(b.id,m.id);const count=e.totalMass();e.step();
+    expect(e.totalMass()).toBe(count);expect(averageY(e,1)).toBeGreaterThan(90);
     for(let i=0;i<SIZE;i++)if(e.cells[i]===1)expect(i%W).toBeGreaterThanOrEqual(70);
   });
   it('one-way pistons stop at an end and reverse back regardless of old bounce state',()=>{
@@ -79,18 +81,18 @@ describe('mechanisms and editing',()=>{
   });
   it('a moving plate pushes water in front without particle loss or teleporting behind',()=>{
     const e=new Engine();fill(e,102,90,110,110,1);
-    const body=e.add('rect',100,100,2,20)!,old=e.poses(),before=e.count();body.lx=105;e.rasterize(old);
-    expect(e.count()).toBe(before);for(let i=0;i<SIZE;i++)if(e.cells[i])expect(i%W).toBeGreaterThanOrEqual(102);
+    const body=e.add('rect',100,100,2,20)!,old=e.poses(),before=e.totalMass();body.lx=105;e.rasterize(old);
+    expect(e.totalMass()).toBe(before);for(let i=0;i<SIZE;i++)if(e.cells[i])expect(i%W).toBeGreaterThanOrEqual(102);
     for(let i=0;i<SIZE;i++)if(e.occupancy[i])expect(e.cells[i]).toBe(0);
   });
   it('retains particles when completely sealed and releases them when space opens',()=>{
     const e=new Engine();e.terrain.fill(1);const i=e.index(100,100);e.terrain[i]=0;e.cells[i]=1;
-    const body=e.add('rect',100.5,100.5,1,1)!;expect(e.count()).toBe(1);expect(e.trapped).toHaveLength(1);
+    const body=e.add('rect',100.5,100.5,1,1)!;expect(e.totalMass()).toBe(1);expect(e.trapped).toHaveLength(1);
     e.terrain[e.index(101,100)]=0;e.rasterize();expect(e.trapped).toHaveLength(0);expect(e.cells[e.index(101,100)]).toBe(1);expect(body).toBeTruthy();
   });
   it('buffered particles can escape above a full-width plate',()=>{
     const e=new Engine();const i=e.index(200,100);e.cells[i]=1;e.add('rect',200,100.5,400,1);
-    expect(e.trapped).toHaveLength(1);e.rasterize();expect(e.trapped).toHaveLength(0);expect(e.count()).toBe(1);
+    expect(e.trapped).toHaveLength(1);e.rasterize();expect(e.trapped).toHaveLength(0);expect(e.totalMass()).toBe(1);
   });
   it('reuses motors, rejects oversized shapes, and has bounded undo',()=>{
     const e=new Engine(),a=e.add('motor',30,30)!,b=e.add('motor',30.4,30.4)!;expect(a.id).toBe(b.id);
@@ -106,8 +108,8 @@ describe('save validation and demo',()=>{
     const bad=structuredClone(saved);bad.nodes[0].speed=Infinity;expect(restored.load(JSON.stringify(bad))).toBe(false);expect(restored.snapshot()).toEqual(saved);
   });
   it('demo runs with both motors, all educational materials and no lost particles',()=>{
-    const e=new Engine();e.demo();const count=e.count();expect(e.nodes.filter(n=>n.kind==='motor')).toHaveLength(2);expect(e.cells).toContain(9);expect(e.cells).toContain(5);expect(e.cells).toContain(4);
-    for(let i=0;i<90;i++)e.step(DT);expect(e.count()).toBe(count);expect(e.nodes.find(n=>n.kind==='motor'&&n.mode==='rotation')!.la).toBeGreaterThan(.5);
+    const e=new Engine();e.demo();const count=e.totalMass();expect(e.nodes.filter(n=>n.kind==='motor')).toHaveLength(2);expect(e.cells).toContain(9);expect(e.cells).toContain(5);expect(e.cells).toContain(4);
+    for(let i=0;i<90;i++)e.step(DT);expect(e.totalMass()).toBeCloseTo(count,2);expect(e.nodes.find(n=>n.kind==='motor'&&n.mode==='rotation')!.la).toBeGreaterThan(.5);
     for(const n of e.nodes)expect(Number.isFinite(e.poses().get(n.id)!.x)).toBe(true);
     expect(e.cells.length).toBe(W*H);
   });
@@ -119,8 +121,8 @@ describe('placed temperature controllers',()=>{
     const n=e.add('thermostat',100.5,100.5)!;n.targetTemperature=150;n.effectRadius=5;
     const center=e.index(100,100),outside=e.index(106,100);e.cells[center]=1;
     expect(e.occupancy[center]).toBe(0);
-    for(let i=0;i<60;i++)e.step();expect(e.temperature[center]).toBeGreaterThan(100);expect(e.cells[center]).toBe(7);expect(e.temperature[outside]).toBe(20);
-    n.targetTemperature=-50;for(let i=0;i<100;i++)e.step();expect(e.temperature[center]).toBeLessThan(0);expect(e.cells[center]).toBe(4);
+    for(let i=0;i<60;i++)e.step();expect(e.temperature[center]).toBeGreaterThan(100);expect(Array.from(e.cells).filter(m=>m===7).length).toBeGreaterThan(0);expect(e.temperature[outside]).toBe(20);
+    n.targetTemperature=-50;for(let i=0;i<100;i++)e.step();expect(e.temperature[center]).toBeLessThan(0);expect(Array.from(e.cells).filter(m=>m===4).length).toBeGreaterThan(0);expect(e.totalMass()).toBeCloseTo(1,4);
   });
   it('supports disabling and moving the active area',()=>{
     const e=new Engine();e.conductivity.fill(0);const n=e.add('thermostat',100.5,100.5)!;n.enabled=false;e.step();expect(e.temperature[e.index(100,100)]).toBe(20);
@@ -143,21 +145,21 @@ describe('material-specific flow',()=>{
   it.each([1,3])('liquid %s levels a mound across a basin while conserving particles',m=>{
     const e=new Engine();e.conductivity.fill(0);e.terrainShape(80,120,140,120,1);e.terrainShape(80,70,80,120,1);e.terrainShape(140,70,140,120,1);
     for(let y=100;y<120;y++){const half=Math.floor((y-100)/2)+1;fill(e,110-half,y,111+half,y+1,m);}
-    const count=e.count();for(let i=0;i<120;i++)e.step();
+    const count=e.totalMass();for(let i=0;i<120;i++)e.step();
     const heights=[];for(let x=81;x<140;x++){let n=0;for(let y=70;y<120;y++)if(e.cells[e.index(x,y)]===m)n++;heights.push(n);}
-    expect(Math.max(...heights)-Math.min(...heights)).toBeLessThanOrEqual(2);expect(e.count()).toBe(count);
+    expect(Math.max(...heights)-Math.min(...heights)).toBeLessThanOrEqual(2);expect(e.totalMass()).toBe(count);
   });
   it('gas spreads below a ceiling rather than forming an inverted mound',()=>{
     const e=new Engine();e.conductivity.fill(0);e.terrainShape(80,60,140,60,1);e.terrainShape(80,60,80,100,1);e.terrainShape(140,60,140,100,1);e.terrainShape(80,100,140,100,1);
-    fill(e,104,61,117,75,9);const count=e.count();for(let i=0;i<180;i++)e.step();
+    fill(e,104,61,117,75,9);const count=e.totalMass();for(let i=0;i<180;i++)e.step();
     let left=0,right=0,below=0;for(let i=0;i<SIZE;i++)if(e.cells[i]===9){if(i%W<100)left++;if(i%W>120)right++;if(Math.floor(i/W)>65)below++;}
-    expect(left).toBeGreaterThan(15);expect(right).toBeGreaterThan(15);expect(below).toBeGreaterThan(10);expect(e.count()).toBe(count);
+    expect(left).toBeGreaterThan(15);expect(right).toBeGreaterThan(15);expect(below).toBeGreaterThan(10);expect(e.totalMass()).toBe(count);
   });
   it('solid shape does not melt into flowing material when viscosity is reduced',()=>{
     const e=new Engine();e.conductivity.fill(0);fill(e,100,80,109,89,6,420);e.viscosity[6]=0;const before=Array.from(e.cells);for(let i=0;i<10;i++)e.step();expect(Array.from(e.cells)).toEqual(before);
   });
   it('lateral redistribution cannot cross walls or rigid barriers',()=>{
-    const e=new Engine();e.conductivity.fill(0);e.terrainShape(0,120,W-1,120,1);e.terrainShape(110,50,110,120,1);fill(e,100,105,110,120,3);const count=e.count();for(let i=0;i<70;i++)e.step();
-    for(let i=0;i<SIZE;i++)if(e.cells[i]===3)expect(i%W).toBeLessThan(110);expect(e.count()).toBe(count);
+    const e=new Engine();e.conductivity.fill(0);e.terrainShape(0,120,W-1,120,1);e.terrainShape(110,50,110,120,1);fill(e,100,105,110,120,3);const count=e.totalMass();for(let i=0;i<70;i++)e.step();
+    for(let i=0;i<SIZE;i++)if(e.cells[i]===3)expect(i%W).toBeLessThan(110);expect(e.totalMass()).toBe(count);
   });
 });

@@ -9,7 +9,8 @@
     "test": "vitest run",
     "preview": "vite preview --host 0.0.0.0",
     "test:e2e": "playwright test",
-    "test:standalone": "node scripts/check-standalone.mjs"
+    "test:standalone": "node scripts/check-standalone.mjs",
+    "test:perf": "VITE_LAB_BENCHMARK=1 vitest run src/components/lab/performance.bench.test.ts"
   },
   "dependencies": {
     "react": "^19.1.0",

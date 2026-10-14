@@ -92,3 +92,25 @@ test('chemistry experiments expose composition and configurable separation devic
   for(const example of ['dissolve','distill']){await page.getByLabel('実験見本').selectOption(example);await page.getByRole('button',{name:'見本',exact:true}).click();s=await saveState(page);expect(s.chemistry.amount).toHaveLength(89600);expect(s.nodes.length).toBeGreaterThan(0);}
   await page.screenshot({path:'test-results/chemistry-distill.png'});expect(errors).toEqual([]);
 });
+
+test('CPU Worker keeps the UI responsive with dense cells and 240 devices, and cannot overwrite edits',async({page})=>{
+  test.setTimeout(60000);
+  await page.addInitScript(()=>{
+    const state={created:0,received:0,pending:0,maxPending:0};(window as any).__cpuWorker=state;
+    const Native=window.Worker;
+    window.Worker=class extends Native{
+      constructor(url:string|URL,options?:WorkerOptions){super(url,options);state.created++;this.addEventListener('message',()=>{state.received++;state.pending--;});}
+      postMessage(message:any,transfer:any=[]){state.pending++;state.maxPending=Math.max(state.maxPending,state.pending);super.postMessage(message,transfer);}
+    };
+  });
+  const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));await page.goto('/');await page.keyboard.press('Space');const saved=await saveState(page);
+  await page.evaluate(s=>{
+    const motor=s.nodes.find((n:any)=>n.kind==='motor'),body=s.nodes.find((n:any)=>n.kind==='rect'),pump=s.nodes.find((n:any)=>n.kind==='membrane');s.nodes=[];s.terrain.fill(0);s.cells.fill(0);s.temperature.fill(20);s.chemistry.amount.fill(1);for(const key of ['secondary','secondaryAmount','tertiary','tertiaryAmount'])s.chemistry[key].fill(0);s.trapped=[];
+    for(let y=150;y<220;y++)for(let x=5;x<395;x++)s.cells[y*400+x]=1;
+    let id=1;for(let n=0;n<80;n++){const x=20+n%16*23,y=20+Math.floor(n/16)*25,m=id++;s.nodes.push({...motor,id:m,name:`負荷モーター${n}`,parent:null,lx:x,ly:y,la:0,speed:.3,anchorX:0,anchorY:0,joint:'fixed',jointOffset:0});s.nodes.push({...body,id:id++,name:`負荷パドル${n}`,parent:m,lx:5,ly:0,la:0,width:10,height:3,anchorX:0,anchorY:0,joint:'fixed',jointOffset:0});s.nodes.push({...pump,id:id++,name:`負荷ポンプ${n}`,kind:'pump',parent:null,lx:x,ly:y+10,la:0,portDistance:6,filterMaterial:0,flowRate:1});}s.nextId=id;localStorage.setItem('cell-fluid-lab-v1',JSON.stringify(s));
+  },saved);
+  await page.reload();await expect.poll(()=>page.evaluate(()=>(window as any).__cpuWorker.received)).toBeGreaterThan(2);
+  const frames=await page.evaluate(()=>new Promise<number>(resolve=>{let count=0;const start=performance.now();function frame(){count++;if(performance.now()-start>=500)resolve(count);else requestAnimationFrame(frame);}requestAnimationFrame(frame);}));expect(frames).toBeGreaterThan(4);
+  expect(await page.evaluate(()=>(window as any).__cpuWorker.maxPending)).toBe(1);
+  await page.keyboard.press('Space');await expect(page.getByText('編集モード · 停止中')).toBeVisible();await page.getByRole('button',{name:'盤面を全消去'}).click();expect((await saveState(page)).nodes).toHaveLength(0);await page.keyboard.press('Space');await expect.poll(()=>page.evaluate(()=>(window as any).__cpuWorker.received)).toBeGreaterThan(4);await page.keyboard.press('Space');expect((await saveState(page)).nodes).toHaveLength(0);expect(errors).toEqual([]);
+});

@@ -58,7 +58,20 @@ export class Engine {
   history: Snapshot[] = [];
   tick = 0;
   revision = 0;
+  editEpoch = 0;
   lost = 0;
+  // Graph/guide indexes live for one physics step; edits may mutate nodes/terrain directly.
+  private graph?:Map<number,LabNode>;
+  private childrenIndex?:Map<number,LabNode[]>;
+  private subtreeIndex=new Map<number,LabNode[]>();
+  private guides?:Int32Array;
+  private guidePrefix=new Int32Array((W+1)*(H+1));
+  private preflightOccupancy=new Int32Array(SIZE);
+  private thermalCapacity=new Float64Array(SIZE);
+  private thermalConductivity=new Float64Array(SIZE);
+  private prepareStep(){this.graph=new Map(this.nodes.map(n=>[n.id,n]));this.childrenIndex=new Map();this.subtreeIndex.clear();for(const n of this.nodes)if(n.parent!==null){const children=this.childrenIndex.get(n.parent)??[];children.push(n);this.childrenIndex.set(n.parent,children);}const prefix=this.guidePrefix;prefix.fill(0);for(let y=0;y<H;y++){let row=0;for(let x=0;x<W;x++){row+=this.terrain[y*W+x]===2?1:0;prefix[(y+1)*(W+1)+x+1]=prefix[y*(W+1)+x+1]+row;}}this.guides=prefix;}
+  private descendants(id:number){if(!this.childrenIndex)return this.nodes.filter(n=>this.isDescendant(n.id,id));let cached=this.subtreeIndex.get(id);if(cached)return cached;const root=this.graph!.get(id);cached=root?[root]:[];for(let i=0;i<cached.length;i++)cached.push(...this.childrenIndex.get(cached[i].id)??[]);this.subtreeIndex.set(id,cached);return cached;}
+  private nearGuide(n:LabNode,p:Pose){if(!this.guides)return true;const c=Math.abs(Math.cos(p.a)),s=Math.abs(Math.sin(p.a)),rx=n.kind==='circle'?n.radius:(c*n.width+s*n.height)/2,ry=n.kind==='circle'?n.radius:(s*n.width+c*n.height)/2;const left=clamp(Math.floor(p.x-rx),0,W),right=clamp(Math.ceil(p.x+rx)+1,0,W),top=clamp(Math.floor(p.y-ry),0,H),bottom=clamp(Math.ceil(p.y+ry)+1,0,H),a=this.guides;return a[bottom*(W+1)+right]-a[top*(W+1)+right]-a[bottom*(W+1)+left]+a[top*(W+1)+left]>0;}
   private moved = new Uint32Array(SIZE);
   private flowTick = 0;
   private heat = new Float32Array(SIZE);
@@ -72,10 +85,10 @@ export class Engine {
   random() { let x=this.randomState; x^=x<<13; x^=x>>>17; x^=x<<5; this.randomState=x; return (x>>>0)/4294967296; }
   index(x: number,y: number) { return x>=0 && x<W && y>=0 && y<H ? Math.floor(y)*W+Math.floor(x) : -1; }
   snapshot(): Snapshot { return {version:6,materialIds:[...MATERIAL_IDS],chemistry:this.chemistry.snapshot(),experimentTitle:this.experimentTitle,experimentDescription:this.experimentDescription,width:W,height:H,cells:Array.from(this.cells),temperature:Array.from(this.temperature),terrain:Array.from(this.terrain),nodes:structuredClone(this.nodes),nextId:this.nextId,viscosity:[...this.viscosity],conductivity:[...this.conductivity],trapped:structuredClone(this.trapped)}; }
-  restore(s: Snapshot) {this.experimentTitle=s.experimentTitle??'';this.experimentDescription=s.experimentDescription??''; this.cells.set(s.cells); this.chemistry.restore(s.chemistry); this.temperature.set(s.temperature); this.terrain.set(s.terrain); this.nodes=structuredClone(s.nodes); this.nextId=s.nextId; this.viscosity=[...s.viscosity]; this.conductivity=[...s.conductivity]; this.trapped=structuredClone(s.trapped); this.rasterize(); this.revision++; }
-  checkpoint() { this.history.push(this.snapshot()); if(this.history.length>40) this.history.shift(); }
+  restore(s: Snapshot) {this.experimentTitle=s.experimentTitle??'';this.experimentDescription=s.experimentDescription??''; this.cells.set(s.cells); this.chemistry.restore(s.chemistry); this.temperature.set(s.temperature); this.terrain.set(s.terrain); this.nodes=structuredClone(s.nodes); this.nextId=s.nextId; this.viscosity=[...s.viscosity]; this.conductivity=[...s.conductivity]; this.trapped=structuredClone(s.trapped); this.rasterize(); this.revision++;this.editEpoch++; }
+  checkpoint() { this.editEpoch++;this.history.push(this.snapshot()); if(this.history.length>40) this.history.shift(); }
   undo() { const s=this.history.pop(); if(s) this.restore(s); return !!s; }
-  clear() {this.experimentTitle='';this.experimentDescription=''; this.chemistry.clear();this.cells.fill(0); this.temperature.fill(20); this.terrain.fill(0); this.nodes=[]; this.trapped=[]; this.occupancy.fill(0); this.nextId=1; this.revision++; }
+  clear() {this.experimentTitle='';this.experimentDescription=''; this.chemistry.clear();this.cells.fill(0); this.temperature.fill(20); this.terrain.fill(0); this.nodes=[]; this.trapped=[]; this.occupancy.fill(0); this.nextId=1; this.revision++;this.editEpoch++; }
   load(raw: string): boolean {
     try {
       const s=JSON.parse(raw);
@@ -140,7 +153,7 @@ export class Engine {
     } catch { return false; }
   }
   poses(): Map<number,Pose> {
-    const result=new Map<number,Pose>(); const map=new Map(this.nodes.map(n=>[n.id,n]));
+    const result=new Map<number,Pose>(); const map=this.graph??new Map(this.nodes.map(n=>[n.id,n]));
     const visit=(n:LabNode):Pose=> {
       const cached=result.get(n.id); if(cached) return cached;
       const parent=n.parent===null?undefined:map.get(n.parent);
@@ -162,7 +175,7 @@ export class Engine {
     x+=Math.cos(a)*(n.anchorX??0)-Math.sin(a)*(n.anchorY??0);y+=Math.sin(a)*(n.anchorX??0)+Math.cos(a)*(n.anchorY??0);
     n.lx=c*(x-px)+s*(y-py); n.ly=-s*(x-px)+c*(y-py); n.la=n.joint==='free'?a:a-pa-(n.jointOffset??0)*(n.joint==='spring'?1:0);
   }
-  isDescendant(id:number,ancestor:number) { let n=this.nodes.find(n=>n.id===id); while(n) { if(n.id===ancestor) return true; n=this.nodes.find(p=>p.id===n!.parent); } return false; }
+  isDescendant(id:number,ancestor:number) { const map=this.graph??new Map(this.nodes.map(n=>[n.id,n]));let n=map.get(id);while(n){if(n.id===ancestor)return true;n=n.parent===null?undefined:map.get(n.parent);}return false; }
   reparent(id: number,parent: number|null) {
     const n=this.nodes.find(n=>n.id===id); if(!n||parent!==null&&(!this.nodes.some(n=>n.id===parent)||this.isDescendant(parent,id))) return false;
     const poses=this.poses(),p=poses.get(id)!; n.parent=parent; this.setWorld(n,p.x,p.y,p.a,poses);
@@ -170,17 +183,17 @@ export class Engine {
       if(body.kind==='rect'){const dx=p.x-target.x,dy=p.y-target.y,c=Math.cos(target.a),s=Math.sin(target.a),u=clamp(c*dx+s*dy,-body.width/2,body.width/2),v=clamp(-s*dx+c*dy,-body.height/2,body.height/2);x=target.x+c*u-s*v;y=target.y+s*u+c*v;}
       if(body.kind==='circle'){const d=Math.hypot(p.x-target.x,p.y-target.y),r=Math.min(d,body.radius);if(d){x=target.x+(p.x-target.x)*r/d;y=target.y+(p.y-target.y)*r/d;}}
       this.setJointAnchor(id,x,y);
-    }this.revision++; return true;
+    }this.revision++;this.editEpoch++; return true;
   }
-  setJoint(id:number,joint:'fixed'|'free'|'spring') { const n=this.nodes.find(n=>n.id===id); if(!n)return; const poses=this.poses(),p=poses.get(id)!; n.joint=joint;n.jointOffset=0;n.jointVelocity=0; this.setWorld(n,p.x,p.y,p.a,poses); this.revision++; }
+  setJoint(id:number,joint:'fixed'|'free'|'spring') { const n=this.nodes.find(n=>n.id===id); if(!n)return; const poses=this.poses(),p=poses.get(id)!; n.joint=joint;n.jointOffset=0;n.jointVelocity=0; this.setWorld(n,p.x,p.y,p.a,poses); this.revision++;this.editEpoch++; }
   jointPoint(id:number,poses=this.poses()){const n=this.nodes.find(n=>n.id===id)!,p=poses.get(id)!;return {x:p.x+Math.cos(p.a)*(n.anchorX??0)-Math.sin(p.a)*(n.anchorY??0),y:p.y+Math.sin(p.a)*(n.anchorX??0)+Math.cos(p.a)*(n.anchorY??0)};}
-  setJointAnchor(id:number,x:number,y:number){const n=this.nodes.find(n=>n.id===id);if(!n)return;const poses=this.poses(),p=poses.get(id)!;n.anchorX=Math.cos(p.a)*(x-p.x)+Math.sin(p.a)*(y-p.y);n.anchorY=-Math.sin(p.a)*(x-p.x)+Math.cos(p.a)*(y-p.y);this.setWorld(n,p.x,p.y,p.a,poses);this.revision++;}
-  private guideScore(nodes:LabNode[]){let score=0;const poses=this.poses();for(const n of nodes)if(n.kind==='rect'||n.kind==='circle')this.shapeCells(n,poses.get(n.id)!,i=>{if(this.terrain[i]===2)score++;});return score;}
-  private guideCollision(nodes:LabNode[]){const poses=this.poses();return nodes.some(n=>{if(n.kind!=='rect'&&n.kind!=='circle')return false;const p=poses.get(n.id)!;const c=Math.abs(Math.cos(p.a)),s=Math.abs(Math.sin(p.a)),rx=n.kind==='circle'?n.radius:(c*n.width+s*n.height)/2,ry=n.kind==='circle'?n.radius:(s*n.width+c*n.height)/2;let hit=p.x-rx<0||p.x+rx>W||p.y-ry<0||p.y+ry>H;this.shapeCells(n,p,i=>{if(this.terrain[i]===2)hit=true;});return hit;});}
-  private relaxJoints(dt:number){for(const n of this.nodes){n.jointContact=false;if(n.joint!=='spring')continue;const old=n.jointOffset??0,v=(n.jointVelocity??0)+(-(n.stiffness??18)*old-(n.damping??8)*(n.jointVelocity??0))*dt,target=clamp(old+v*dt,-(n.jointLimit??Math.PI/2),n.jointLimit??Math.PI/2),children=this.nodes.filter(c=>this.isDescendant(c.id,n.id));const steps=Math.max(1,Math.ceil(Math.abs(target-old)*400));let safe=old;for(let i=1;i<=steps;i++){n.jointOffset=old+(target-old)*i/steps;if(this.guideCollision(children)){n.jointOffset=safe;n.jointContact=true;break;}safe=n.jointOffset;}n.jointVelocity=n.jointContact?0:v;}}
+  setJointAnchor(id:number,x:number,y:number){const n=this.nodes.find(n=>n.id===id);if(!n)return;const poses=this.poses(),p=poses.get(id)!;n.anchorX=Math.cos(p.a)*(x-p.x)+Math.sin(p.a)*(y-p.y);n.anchorY=-Math.sin(p.a)*(x-p.x)+Math.cos(p.a)*(y-p.y);this.setWorld(n,p.x,p.y,p.a,poses);this.revision++;this.editEpoch++;}
+  private guideScore(nodes:LabNode[]){let score=0;const poses=this.poses();for(const n of nodes)if((n.kind==='rect'||n.kind==='circle')&&this.nearGuide(n,poses.get(n.id)!))this.shapeCells(n,poses.get(n.id)!,i=>{if(this.terrain[i]===2)score++;});return score;}
+  private guideCollision(nodes:LabNode[]){const poses=this.poses();return nodes.some(n=>{if(n.kind!=='rect'&&n.kind!=='circle')return false;const p=poses.get(n.id)!;const c=Math.abs(Math.cos(p.a)),s=Math.abs(Math.sin(p.a)),rx=n.kind==='circle'?n.radius:(c*n.width+s*n.height)/2,ry=n.kind==='circle'?n.radius:(s*n.width+c*n.height)/2;let hit=p.x-rx<0||p.x+rx>W||p.y-ry<0||p.y+ry>H;if(this.nearGuide(n,p))this.shapeCells(n,p,i=>{if(this.terrain[i]===2)hit=true;});return hit;});}
+  private relaxJoints(dt:number){for(const n of this.nodes){n.jointContact=false;if(n.joint!=='spring')continue;const old=n.jointOffset??0,v=(n.jointVelocity??0)+(-(n.stiffness??18)*old-(n.damping??8)*(n.jointVelocity??0))*dt,target=clamp(old+v*dt,-(n.jointLimit??Math.PI/2),n.jointLimit??Math.PI/2);if(target===old&&v===0)continue;const children=this.descendants(n.id);const steps=Math.max(1,Math.ceil(Math.abs(target-old)*400));let safe=old;for(let i=1;i<=steps;i++){n.jointOffset=old+(target-old)*i/steps;if(this.guideCollision(children)){n.jointOffset=safe;n.jointContact=true;break;}safe=n.jointOffset;}n.jointVelocity=n.jointContact?0:v;}}
   private bendAtGuides(nodes:LabNode[]){
     for(let pass=0;pass<nodes.length;pass++){if(!this.guideCollision(nodes))return true;let resolved=false;
-      for(const n of [...nodes].reverse().filter(n=>n.joint!=='fixed'&&n.kind!=='motor')){const children=nodes.filter(c=>this.isDescendant(c.id,n.id));if(!this.guideCollision(children))continue;const key=n.joint==='free'?'la':'jointOffset',old=n[key]??0,limit=n.jointLimit??Math.PI/2;let found=false;
+      for(const n of [...nodes].reverse().filter(n=>n.joint!=='fixed'&&n.kind!=='motor')){const children=this.descendants(n.id);if(!this.guideCollision(children))continue;const key=n.joint==='free'?'la':'jointOffset',old=n[key]??0,limit=n.jointLimit??Math.PI/2;let found=false;
         const initial=this.guideScore(children),blocked=new Set<number>();
         for(let i=1;i<=80&&!found;i++)for(const sign of [1,-1]){if(blocked.has(sign))continue;const value=old+sign*i*.005;if(n.joint==='spring'&&Math.abs(value)>limit)continue;n[key]=value;if(this.guideScore(children)>initial+1){blocked.add(sign);continue;}if(!this.guideCollision(children)){found=true;break;}}
         if(!found)n[key]=old;else{n.jointContact=true;n.jointVelocity=0;resolved=true;break;}
@@ -204,7 +217,7 @@ export class Engine {
       while(parent!==null&&ids.has(parent)) parent=this.nodes.find(p=>p.id===parent)?.parent??null;
       const p=poses.get(n.id)!; n.parent=parent; this.setWorld(n,p.x,p.y,p.a,poses);
     }
-    this.nodes=this.nodes.filter(n=>!ids.has(n.id)); this.revision++; this.rasterize();
+    this.nodes=this.nodes.filter(n=>!ids.has(n.id)); this.revision++;this.editEpoch++; this.rasterize();
   }
   move(ids:Set<number>,dx:number,dy:number,original:Map<number,Pose>) {
     const roots=this.nodes.filter(n=>{
@@ -221,9 +234,9 @@ export class Engine {
       for(const n of roots){const a=before.get(n.id)!,b=original.get(n.id)!,f=step/steps;this.setWorld(n,a.x+(b.x+dx-a.x)*f,a.y+(b.y+dy-a.y)*f,b.a,before);}
       const poses=this.poses();let collision=false;
       for(const n of moving.filter(n=>n.kind==='rect'||n.kind==='circle'))this.shapeCells(n,poses.get(n.id)!,(i)=>{if(this.terrain[i]===2)collision=true;});
-      if(collision){for(const {n,lx,ly,la} of locals)Object.assign(n,{lx,ly,la});this.rasterize();this.revision++;return false;}
+      if(collision){for(const {n,lx,ly,la} of locals)Object.assign(n,{lx,ly,la});this.rasterize();this.revision++;this.editEpoch++;return false;}
     }
-    this.rasterize(before);this.revision++;return true;
+    this.rasterize(before);this.revision++;this.editEpoch++;return true;
   }
   add(kind:NodeKind,x:number,y:number,width=1,height=1,radius=1):LabNode|null {
     if(kind==='rect'&&width*height>40000||kind==='circle'&&Math.PI*radius*radius>40000)return null;
@@ -237,7 +250,7 @@ export class Engine {
       const parent=this.nodes.find(p=>p.kind==='motor'&&Math.floor(poses.get(p.id)!.x)===Math.floor(x)&&Math.floor(poses.get(p.id)!.y)===Math.floor(y))??[...this.nodes].reverse().find(p=>(p.kind==='rect'||p.kind==='circle')&&this.contains(p,poses.get(p.id)!,x,y));
       if(parent) {n.parent=parent.id; this.setWorld(n,x,y,0,poses);}
     }
-    this.nodes.push(n); this.rasterize(); this.revision++; return n;
+    this.nodes.push(n); this.rasterize(); this.revision++;this.editEpoch++; return n;
   }
   contains(n:LabNode,p:Pose,x:number,y:number) {
     const dx=x-p.x,dy=y-p.y,c=Math.cos(p.a),s=Math.sin(p.a),lx=c*dx+s*dy,ly=-s*dx+c*dy;
@@ -248,9 +261,9 @@ export class Engine {
     if(n.kind==='valve'&&!n.enabled){const a=p.a+(n.portAngle??0)*Math.PI/180;for(let k=-3;k<=3;k++)for(let offset=-1;offset<=1;offset++){const x=Math.floor(p.x-Math.sin(a)*k+Math.cos(a)*offset),y=Math.floor(p.y+Math.cos(a)*k+Math.sin(a)*offset),i=this.index(x,y);if(i>=0)fn(i,x,y);}return;}
     if(n.kind==='motor') {const i=this.index(p.x,p.y);if(i>=0)fn(i,Math.floor(p.x),Math.floor(p.y));return;}
     if(n.kind==='pin'||n.kind==='thermostat'||n.kind==='pump'||n.kind==='valve'||n.kind==='membrane')return;
-    const c=Math.abs(Math.cos(p.a)),s=Math.abs(Math.sin(p.a));
+    const cos=Math.cos(p.a),sin=Math.sin(p.a),c=Math.abs(cos),s=Math.abs(sin);
     const rx=n.kind==='circle'?n.radius:(c*n.width+s*n.height)/2,ry=n.kind==='circle'?n.radius:(s*n.width+c*n.height)/2;
-    for(let y=Math.max(0,Math.floor(p.y-ry));y<=Math.min(H-1,Math.ceil(p.y+ry));y++)for(let x=Math.max(0,Math.floor(p.x-rx));x<=Math.min(W-1,Math.ceil(p.x+rx));x++) if(this.contains(n,p,x+.5,y+.5))fn(y*W+x,x,y);
+    for(let y=Math.max(0,Math.floor(p.y-ry));y<=Math.min(H-1,Math.ceil(p.y+ry));y++)for(let x=Math.max(0,Math.floor(p.x-rx));x<=Math.min(W-1,Math.ceil(p.x+rx));x++) {const dx=x+.5-p.x,dy=y+.5-p.y;if(n.kind==='circle'?dx*dx+dy*dy<=n.radius*n.radius:Math.abs(cos*dx+sin*dy)<=n.width/2&&Math.abs(-sin*dx+cos*dy)<=n.height/2)fn(y*W+x,x,y);}
   }
   private free(i:number) { return i>=0 && !this.cells[i] && this.terrain[i]!==1 && !this.occupancy[i]; }
   private findSpace(x:number,y:number,dx:number,dy:number):number {
@@ -275,10 +288,13 @@ export class Engine {
     return -1;
   }
   rasterize(previous?:Map<number,Pose>) {
-    const poses=this.poses();this.occupancy.fill(0);this.failedSpace.fill(0);
-    for(const n of this.nodes) this.shapeCells(n,poses.get(n.id)!,(i)=>{this.occupancy[i]=n.id;});
+    if(!this.graph)this.editEpoch++;
+    const poses=this.poses();
+    if(previous&&!this.trapped.length&&this.nodes.every(n=>{if(!['motor','rect','circle','valve'].includes(n.kind))return true;const a=previous.get(n.id),b=poses.get(n.id)!;return !!a&&a.x===b.x&&a.y===b.y&&(n.kind==='motor'||n.kind==='circle'||a.a===b.a);}))return;
+    const occupied:number[]=[];this.occupancy.fill(0);this.failedSpace.fill(0);
+    for(const n of this.nodes) this.shapeCells(n,poses.get(n.id)!,(i)=>{if(!this.occupancy[i])occupied.push(i);this.occupancy[i]=n.id;});
     const pending:Trapped[]=[];
-    for(let i=0;i<SIZE;i++) if(this.occupancy[i]&&this.cells[i]) {
+    for(const i of occupied.sort((a,b)=>a-b)) if(this.cells[i]) {
       const x=i%W,y=Math.floor(i/W),p=poses.get(this.occupancy[i])!,old=previous?.get(this.occupancy[i]);
       let vx=1,vy=0;
       if(old) { const c=Math.cos(old.a-p.a),s=Math.sin(old.a-p.a),rx=x+.5-p.x,ry=y+.5-p.y; vx=x+.5-(old.x+c*rx-s*ry);vy=y+.5-(old.y+s*rx+c*ry); }
@@ -314,23 +330,23 @@ export class Engine {
     }
   }
   private canDisplace(previous:Map<number,Pose>){
-    const old=this.occupancy.slice(),poses=this.poses(),reserved:number[]=[];this.occupancy.fill(0);this.failedSpace.fill(0);
-    for(const n of this.nodes)this.shapeCells(n,poses.get(n.id)!,(i)=>{this.occupancy[i]=n.id;});
+    const old=this.occupancy,poses=this.poses(),reserved:number[]=[],occupied:number[]=[];this.occupancy=this.preflightOccupancy;this.occupancy.fill(0);this.failedSpace.fill(0);
+    for(const n of this.nodes)this.shapeCells(n,poses.get(n.id)!,(i)=>{if(!this.occupancy[i])occupied.push(i);this.occupancy[i]=n.id;});
     let possible=true;
-    for(let i=0;i<SIZE;i++)if(this.occupancy[i]&&this.cells[i]){
+    for(const i of occupied.sort((a,b)=>a-b))if(this.cells[i]){
       const p=poses.get(this.occupancy[i])!,before=previous.get(this.occupancy[i]);const vx=p.x-(before?.x??p.x),vy=p.y-(before?.y??p.y);
       const dx=Math.abs(vx)>=Math.abs(vy)?(vx>=0?1:-1):0,dy=dx?0:(vy>=0?1:-1);
       let j=this.findSpace(i%W,Math.floor(i/W),dx,dy);if(j<0)j=this.findSpace(i%W,Math.floor(i/W),-dx,-dy);
       if(j<0){possible=false;break;}this.cells[j]=this.cells[i];reserved.push(j);
     }
-    for(const j of reserved)this.cells[j]=0;this.occupancy.set(old);this.failedSpace.fill(0);return possible;
+    for(const j of reserved)this.cells[j]=0;this.preflightOccupancy=this.occupancy;this.occupancy=old;this.failedSpace.fill(0);return possible;
   }
   private drive(dt:number) {
     for(const n of this.nodes.filter(n=>n.kind==='motor')) {
       n.blocked=false;if(!n.direction||!n.speed)continue;
-      const flex=descendantState(this.nodes);const start={la:n.la,t:n.t,bounce:n.bounce,direction:n.direction};
+      const start={la:n.la,t:n.t,bounce:n.bounce,direction:n.direction};
       // Each step sweeps every descendant with <= 0.75 cell travel; thin guides cannot be skipped.
-      const descendants=this.nodes.filter(c=>this.isDescendant(c.id,n.id));
+      const descendants=this.descendants(n.id),flex=descendantState(descendants);
       const poses=this.poses(),origin=poses.get(n.id)!;
       let extent=1;for(const c of descendants){const p=poses.get(c.id)!;extent=Math.max(extent,Math.hypot(p.x-origin.ax,p.y-origin.ay)+Math.hypot(c.width,c.height)/2+c.radius);}
       const distance=n.mode==='rotation'?n.speed*dt*extent:n.speed*dt*Math.max(1,n.amp)*.5;
@@ -345,7 +361,7 @@ export class Engine {
         }
         collision=!this.bendAtGuides(descendants);
         if(collision)break;
-        trajectory.push({motor:{la:n.la,t:n.t,bounce:n.bounce,direction:n.direction},flex:descendantState(this.nodes)});
+        trajectory.push({motor:{la:n.la,t:n.t,bounce:n.bounce,direction:n.direction},flex:descendantState(descendants)});
       }
       if(!collision&&!this.canDisplace(poses))collision=true;
       if(collision){Object.assign(n,start);restoreJoints(this.nodes,flex);n.blocked=true;}
@@ -355,12 +371,13 @@ export class Engine {
       }
     }
   }
-  devicePorts(n:LabNode){const p=this.poses().get(n.id)!,a=p.a+(n.portAngle??0)*Math.PI/180,d=n.portDistance??6;return {input:{x:p.x-Math.cos(a)*d,y:p.y-Math.sin(a)*d},output:{x:p.x+Math.cos(a)*d,y:p.y+Math.sin(a)*d}};}
+  devicePorts(n:LabNode,poses=this.poses()){const p=poses.get(n.id)!,a=p.a+(n.portAngle??0)*Math.PI/180,d=n.portDistance??6;return {input:{x:p.x-Math.cos(a)*d,y:p.y-Math.sin(a)*d},output:{x:p.x+Math.cos(a)*d,y:p.y+Math.sin(a)*d}};}
   private runDevices(dt:number){
+    const poses=this.poses();
     for(const n of this.nodes.filter(n=>['pump','valve','membrane'].includes(n.kind))){
       if(!n.enabled){n.deviceStatus=n.kind==='valve'?'閉鎖':'停止';continue;}
       if((n.flowRate??2)<=0){n.deviceStatus='流量0';continue;}
-      const ports=this.devicePorts(n),i=this.index(ports.input.x,ports.input.y),j=this.index(ports.output.x,ports.output.y);
+      const ports=this.devicePorts(n,poses),i=this.index(ports.input.x,ports.input.y),j=this.index(ports.output.x,ports.output.y);
       if(i<0||j<0){n.deviceStatus='入口・出口が盤面外';continue;}
       if(this.terrain[i]===1||this.occupancy[i]||!this.chemistry.free(j)){n.deviceStatus='入口・出口が遮断';continue;}
       if(n.kind!=='membrane'&&['solid','powder'].includes(MATERIALS[this.cells[i]].phase)){n.deviceStatus='固体は移送不可';continue;}
@@ -389,18 +406,18 @@ export class Engine {
     }
   }
   private thermal() {
-    this.heat.fill(0);
+    this.heat.fill(0);this.thermalCapacity.fill(0);this.thermalConductivity.fill(0);
     for(let y=0;y<H;y++)for(let x=0;x<W;x++) {
       const i=y*W+x;
       for(let axis=0;axis<2;axis++) {
         const j=axis===0?(x<W-1?i+1:-1):(y<H-1?i+W:-1);
         if(j<0)continue;
-        const mi=this.cells[i],mj=this.cells[j];
-        const ki=this.terrain[i]||this.occupancy[i] ? .08:this.chemistry.conductivity(i);
-        const kj=this.terrain[j]||this.occupancy[j] ? .08:this.chemistry.conductivity(j);
+        const difference=this.temperature[j]-this.temperature[i];if(difference===0)continue;
+        const ki=this.thermalConductivity[i]||(this.thermalConductivity[i]=this.terrain[i]||this.occupancy[i] ? .08:this.chemistry.conductivity(i));
+        const kj=this.thermalConductivity[j]||(this.thermalConductivity[j]=this.terrain[j]||this.occupancy[j] ? .08:this.chemistry.conductivity(j));
         const k=Math.min(ki,kj)*.11;
-        const ci=this.terrain[i]||this.occupancy[i]?2:this.chemistry.capacity(i),cj=this.terrain[j]||this.occupancy[j]?2:this.chemistry.capacity(j);
-        const q=(this.temperature[j]-this.temperature[i])*Math.min(k,.2*Math.min(ci,cj));
+        const ci=this.thermalCapacity[i]||(this.thermalCapacity[i]=this.terrain[i]||this.occupancy[i]?2:this.chemistry.capacity(i)),cj=this.thermalCapacity[j]||(this.thermalCapacity[j]=this.terrain[j]||this.occupancy[j]?2:this.chemistry.capacity(j));
+        const q=difference*Math.min(k,.2*Math.min(ci,cj));
         this.heat[i]+=q/ci;this.heat[j]-=q/cj;
       }
     }
@@ -467,7 +484,9 @@ export class Engine {
       }
     }
   }
-  step(dt=DT) {const old=this.poses();this.relaxJoints(dt);this.drive(dt);this.rasterize(old);this.runDevices(dt);this.thermal();this.chemistry.step();this.flow();this.flow();this.tick++;}
+  step(dt=DT) {this.prepareStep();try{const old=this.poses();this.relaxJoints(dt);this.drive(dt);this.rasterize(old);this.runDevices(dt);this.thermal();this.chemistry.step();this.flow();this.flow();this.tick++;}finally{this.graph=undefined;this.childrenIndex=undefined;this.guides=undefined;this.subtreeIndex.clear();}}
+  runtimeState(){return {randomState:this.randomState,flowTick:this.flowTick,tick:this.tick,lost:this.lost};}
+  restoreRuntime(s:ReturnType<Engine['runtimeState']>){this.randomState=s.randomState;this.flowTick=s.flowTick;this.tick=s.tick;this.lost=s.lost;this.moved.fill(0);}
   totalMass(){let mass=this.trapped.reduce((s,p)=>s+(p.components?.reduce((t,c)=>t+c.amount,0)??1),0);for(let i=0;i<SIZE;i++)mass+=this.chemistry.mass(i);return mass;}
   count() {let count=this.trapped.length;for(let i=0;i<SIZE;i++)if(this.cells[i])count++;return count;}
   experiment(kind:string){
@@ -498,7 +517,7 @@ export class Engine {
       const membrane=this.add('membrane',210.5,188.5)!;membrane.name='E回収用の選択膜';membrane.portDistance=30;membrane.filterMaterial=16;membrane.flowRate=8;
       const valve=this.add('valve',262.5,160.5)!;valve.name='回収槽のバルブ';valve.portAngle=90;valve.portDistance=8;valve.flowRate=4;
     }
-    this.rasterize();this.tick=0;this.revision++;
+    this.rasterize();this.tick=0;this.revision++;this.editEpoch++;
   }
   jointDemo(clear=true){
     if(clear)this.clear();
@@ -530,9 +549,9 @@ export class Engine {
     const piston=this.add('motor',273,153)!;piston.name='02 · 反復ピストン';piston.mode='piston';piston.amp=42;piston.speed=.65;piston.strokeAngle=Math.PI;piston.t=.1;
     const tip=this.poses().get(piston.id)!;
     const plate=this.add('rect',tip.ax,tip.ay,3,27)!;plate.name='押板';this.reparent(plate.id,piston.id);
-    this.terrainShape(223,135,225,165,2);this.rasterize();this.tick=0;this.revision++;
+    this.terrainShape(223,135,225,165,2);this.rasterize();this.tick=0;this.revision++;this.editEpoch++;
   }
 }
 
 function descendantState(nodes:LabNode[]){return nodes.map(n=>({id:n.id,la:n.la,jointOffset:n.jointOffset,jointVelocity:n.jointVelocity}));}
-function restoreJoints(nodes:LabNode[],states:ReturnType<typeof descendantState>){for(const state of states){const n=nodes.find(n=>n.id===state.id);if(n){n.la=state.la;n.jointOffset=state.jointOffset;n.jointVelocity=state.jointVelocity;}}}
+function restoreJoints(nodes:LabNode[],states:ReturnType<typeof descendantState>){const map=new Map(nodes.map(n=>[n.id,n]));for(const state of states){const n=map.get(state.id);if(n){n.la=state.la;n.jointOffset=state.jointOffset;n.jointVelocity=state.jointVelocity;}}}

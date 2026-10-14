@@ -18,6 +18,7 @@ try {
   page.on('pageerror', error => errors.push(error.message));
   page.on('request', request => { if (/^https?:/.test(request.url()) && request.url() !== url) external.push(request.url()); });
   await page.goto(url);
+  await expect.poll(()=>page.workers().length).toBeGreaterThan(0);
   await expect(page.getByRole('heading', { name: 'セル流体実験台 FLUID LAB' })).toBeVisible();
   await expect(page.locator('.status-right')).toContainText(/0\.[1-9] s|[1-9]\d*\.\d s/);
   await page.getByRole('button', { name: '停止 Space', exact: true }).click();
@@ -70,7 +71,7 @@ try {
   expect(errors).toEqual([]);
   expect(external).toEqual([]);
   await page.screenshot({ path: resolve(root, 'test-results/standalone.png') });
-  console.log(`PASS: ${httpMode ? 'single HTML via intercepted HTTP (no server)' : 'file://'} + offline, animation, editing, piston settings, localStorage reload, Undo, mixed cells, experiment presets, membrane settings and concentration view; zero external dependencies and JavaScript errors.`);
+  console.log(`PASS: ${httpMode ? 'single HTML via intercepted HTTP (no server)' : 'file://'} + offline, embedded CPU Worker, animation, editing, piston settings, localStorage reload, Undo, mixed cells, experiment presets, membrane settings and concentration view; zero external dependencies and JavaScript errors.`);
   await context.close();
 } finally {
   await browser.close();

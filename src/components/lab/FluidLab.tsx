@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode, type PointerEvent as ReactPointerEvent } from 'react';
 import { Play, Pause, MousePointer2, Droplets, Eraser, Square, Circle, ScanLine, Cog, MapPin, Undo2, Save, FolderOpen, FlaskConical, Trash2, ChevronDown, ChevronRight, GripHorizontal, X, Flame, Snowflake, Layers, SlidersHorizontal, Wrench, Grid2X2, Thermometer, GitBranch, RotateCcw, HelpCircle, Check, Minus, Plus, CircleDot } from 'lucide-react';
 import { Engine, MATERIALS, W, H, DT, STORAGE_KEY, clamp, type LabNode, type Pose } from './engine';
+import SimulationWorker from './simulation.worker?worker&inline';
+import {SimulationRunner} from './simulation-runner';
 import { REACTIONS } from './chemistry';
 import { Renderer, type RenderOptions } from './renderer';
 
@@ -45,26 +47,28 @@ export default function FluidLab() {
   const engineRef=useRef<Engine|null>(null);
   if(!engineRef.current){const e=new Engine();let loaded=false;try{const raw=localStorage.getItem(STORAGE_KEY);if(raw)loaded=e.load(raw);}catch{/* Storage may be unavailable; editing still works. */}if(!loaded)e.demo();engineRef.current=e;}
   const engine=engineRef.current;
+  const simulation=useRef<SimulationRunner|null>(null);
   const canvas=useRef<HTMLCanvasElement>(null),gesture=useRef<Gesture|null>(null),cursorRef=useRef<{x:number;y:number}|null>(null);
   const [running,setRunning]=useState(true),[speed,setSpeed]=useState(1),[tool,setTool]=useState<Tool>('fluid'),[material,setMaterial]=useState(1),[radius,setRadius]=useState(6);
   const [selected,setSelected]=useState<Set<number>>(new Set()),[revision,setRevision]=useState(0),[thermal,setThermal]=useState(false),[connections,setConnections]=useState(true),[grid,setGrid]=useState(true),[hints,setHints]=useState(true);
   const [experiment,setExperiment]=useState('overview'),[view,setView]=useState<'matter'|'temperature'|'component'|'flow'>('matter'),[component,setComponent]=useState(11);
-  const [stats,setStats]=useState({count:engine.count(),fps:60,tick:0}),[cursor,setCursor]=useState<{x:number;y:number;material:number;temperature:number}|null>(null),[notice,setNotice]=useState(''),[help,setHelp]=useState(false);
+  const [stats,setStats]=useState({count:engine.count(),fps:60,tick:0,rate:0,stepMs:0,mass:engine.totalMass()}),[cursor,setCursor]=useState<{x:number;y:number;material:number;temperature:number}|null>(null),[notice,setNotice]=useState(''),[help,setHelp]=useState(false);
   const noticeTimer=useRef<ReturnType<typeof setTimeout>|null>(null);
   const live=useRef({running,speed,tool,material,radius,selected,thermal,connections,grid,hints,view,component});live.current={running,speed,tool,material,radius,selected,thermal,connections,grid,hints,view,component};
   const refresh=()=>setRevision(v=>v+1);
   const inform=(message:string)=>{setNotice(message);if(noticeTimer.current)clearTimeout(noticeTimer.current);noticeTimer.current=setTimeout(()=>setNotice(''),4200);};
+  const toggleRunning=()=>{simulation.current?.invalidate();setRunning(v=>!v);};
   const undo=()=>{gesture.current=null;if(engine.undo()){setSelected(new Set());refresh();inform('ひとつ前の編集に戻しました');}else inform('戻せる編集はありません');};
   const remove=()=>{if(!live.current.selected.size)return;engine.checkpoint();engine.delete(live.current.selected);setSelected(new Set());refresh();};
   const saved=()=>{try{localStorage.setItem(STORAGE_KEY,JSON.stringify(engine.snapshot()));inform('このブラウザに実験を保存しました');}catch{inform('保存できませんでした。ブラウザの保存領域を確認してください');}};
   const load=()=>{try{const raw=localStorage.getItem(STORAGE_KEY);if(!raw){inform('保存された実験はありません');return;}engine.checkpoint();const history=engine.history;if(engine.load(raw)){engine.history=history;setSelected(new Set());setHints(false);refresh();inform('保存した実験を読み込みました');}else{engine.history.pop();engine.checkpoint();engine.demo();setSelected(new Set());setHints(true);refresh();inform('保存データを読めないため見本を表示しました');}}catch{inform('保存データにアクセスできませんでした');}};
   const edit=(n:LabNode,patch:Partial<LabNode>)=>{Object.assign(n,patch);engine.rasterize();refresh();};
-  const beforeEdit=()=>{engine.checkpoint();refresh();};
+  const beforeEdit=()=>{simulation.current?.invalidate();engine.checkpoint();refresh();};
   useEffect(()=>{
     const key=(e:KeyboardEvent)=> {
       if((e.target as HTMLElement).closest('input,textarea,select,[contenteditable="true"]'))return;
       if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='z'){e.preventDefault();undo();return;}
-      if(e.code==='Space'){e.preventDefault();if(e.repeat)return;setRunning(v=>!v);return;}
+      if(e.code==='Space'){e.preventDefault();if(e.repeat)return;toggleRunning();return;}
       if(e.key==='Delete'||e.key==='Backspace'){e.preventDefault();remove();return;}
       if(e.key==='Escape'){connection.current=null;gesture.current=null;setSelected(new Set());setHelp(false);return;}
       if(e.key==='['||e.key===']'){setRadius(r=>clamp(r+(e.key===']'?1:-1),1,28));return;}
@@ -75,19 +79,21 @@ export default function FluidLab() {
   useEffect(()=>{
     if(!canvas.current)return;
     const element=canvas.current,ctx=element.getContext('2d',{alpha:false})!,renderer=new Renderer();
-    let frame=0,last=performance.now(),accumulator=0,report=last,frames=0;
+    let worker:Worker|null=null;try{worker=new SimulationWorker();}catch{/* CPU fallback for browsers that restrict Workers. */}
+    const runner=new SimulationRunner(engine,worker);simulation.current=runner;
+    let frame=0,last=performance.now(),report=last,frames=0,reportedTick=engine.tick;
     const wheel=(e:WheelEvent)=>{e.preventDefault();setRadius(r=>clamp(r+(e.deltaY>0?-1:1),1,28));};element.addEventListener('wheel',wheel,{passive:false});
     const loop=(now:number)=> {
       const state=live.current,elapsed=Math.min((now-last)/1000,.1);last=now;
       // Editing gestures are transactions; physics resumes immediately after release.
-      if(state.running&&!gesture.current){accumulator+=elapsed*state.speed;let steps=0;while(accumulator>=DT&&steps<9){engine.step();accumulator-=DT;steps++;}if(steps===9)accumulator=0;}else accumulator=0;
+      runner.advance(elapsed,state.speed,state.running&&!gesture.current);
       const g=gesture.current;
       const options:RenderOptions={selected:state.selected,temperature:state.view==='temperature'||state.thermal,view:state.view,component:state.component,connections:state.connections,grid:state.grid,hints:state.hints,cursor:cursorRef.current?{...cursorRef.current,radius:state.radius,tool:g?.tool??state.tool}:undefined,preview:g&&(g.mode==='shape'||g.mode==='range')?{tool:g.tool,x0:g.x,y0:g.y,x1:g.endX,y1:g.endY}:undefined};
       renderer.render(ctx,engine,options);frames++;
-      if(now-report>350){setStats({count:engine.count(),fps:Math.round(frames*1000/(now-report)),tick:engine.tick});frames=0;report=now;refresh();const c=cursorRef.current;if(c){const i=engine.index(c.x,c.y);setCursor({x:Math.floor(c.x),y:Math.floor(c.y),material:engine.cells[i]??0,temperature:engine.temperature[i]??20});}}
+      if(now-report>350){setStats({count:engine.count(),fps:Math.round(frames*1000/(now-report)),tick:engine.tick,rate:Math.max(0,(engine.tick-reportedTick)*DT*1000/(now-report)),stepMs:runner.stepMilliseconds,mass:engine.totalMass()});reportedTick=engine.tick;frames=0;report=now;refresh();const c=cursorRef.current;if(c){const i=engine.index(c.x,c.y);setCursor({x:Math.floor(c.x),y:Math.floor(c.y),material:engine.cells[i]??0,temperature:engine.temperature[i]??20});}}
       frame=requestAnimationFrame(loop);
     };frame=requestAnimationFrame(loop);
-    return()=>{cancelAnimationFrame(frame);element.removeEventListener('wheel',wheel);if(noticeTimer.current)clearTimeout(noticeTimer.current);};
+    return()=>{runner.dispose();simulation.current=null;cancelAnimationFrame(frame);element.removeEventListener('wheel',wheel);if(noticeTimer.current)clearTimeout(noticeTimer.current);};
   },[]);
   const point=(e:ReactPointerEvent<HTMLCanvasElement>)=>{const rect=e.currentTarget.getBoundingClientRect();return{x:clamp((e.clientX-rect.left)/rect.width*W,0,W-.001),y:clamp((e.clientY-rect.top)/rect.height*H,0,H-.001)};};
   const paint=(x:number,y:number,t:Tool,overwrite:boolean)=> {
@@ -99,6 +105,7 @@ export default function FluidLab() {
   useEffect(()=>{connection.current=null;},[tool]);
   const pointerDown=(e:ReactPointerEvent<HTMLCanvasElement>)=> {
     if(e.button!==0&&e.button!==2)return;e.preventDefault();e.currentTarget.setPointerCapture(e.pointerId);
+    simulation.current?.invalidate();
     const p=point(e),t=e.button===2?'erase':tool;cursorRef.current=p;
     const base:Gesture={mode:'paint',tool:t,x:p.x,y:p.y,lastX:p.x,lastY:p.y,endX:p.x,endY:p.y,changed:false};
     if(t==='connect'){const hit=engine.hit(p.x,p.y);if(connection.current===null){if(hit){connection.current=hit.id;setSelected(new Set([hit.id]));inform('親をクリック · 空白で背景へ切離し');}}else{const child=connection.current;if(hit?.id===child){connection.current=null;inform('接続を解除しました');return;}engine.checkpoint();if(engine.reparent(child,hit?.id??null)){engine.rasterize();inform('接続しました · 支点は選択ツールで移動できます');}else{engine.history.pop();inform('循環する接続はできません');}connection.current=null;refresh();}return;}
@@ -168,7 +175,7 @@ export default function FluidLab() {
       <div className="canvas-footer"><span><span className="keycap">{currentTool.key||'↗'}</span>{currentTool.name}</span><span>右クリックで消去 <b>·</b> ホイールでブラシ調整</span></div>
     </div>
     <FloatingPanel title="ツール" icon={Wrench} initial={{x:16,y:86}} className="tools-panel">
-      <div className="playback"><button className={`play-button ${running?'running':''}`} onClick={()=>setRunning(!running)}>{running?<Pause size={15}/>:<Play size={15}/>}<span>{running?'停止':'再生'}</span><kbd>Space</kbd></button><div className="speed-switch">{[1,2,3].map(s=><button key={s} className={speed===s?'active':''} onClick={()=>setSpeed(s)}>{s}×</button>)}</div></div>
+      <div className="playback"><button className={`play-button ${running?'running':''}`} onClick={toggleRunning}>{running?<Pause size={15}/>:<Play size={15}/>}<span>{running?'停止':'再生'}</span><kbd>Space</kbd></button><div className="speed-switch">{[1,2,3].map(s=><button key={s} className={speed===s?'active':''} onClick={()=>setSpeed(s)}>{s}×</button>)}</div></div>
       <div className="section-label">物質 <span>実在 / 架空</span></div><div className="material-grid">{MATERIALS.slice(1).map((m,i)=><button key={m.name} className={`material ${material===i+1?'active':''}`} onClick={()=>chooseMaterial(i+1)} title={`${m.fictional?'架空物質 · ':''}${m.description??m.name} · 比重 ${m.density} · ${m.temperature}℃`}><span className="material-dot" style={{background:`rgb(${m.color.join(',')})`}}/>{m.name}{material===i+1&&<Check size={12}/>}</button>)}</div>
       <div className="selected-material"><span style={{color:`rgb(${MATERIALS[material].color.join(',')})`}}>{MATERIALS[material].en}</span><span>{MATERIALS[material].phase==='gas'?'気体':MATERIALS[material].phase==='liquid'?'液体':MATERIALS[material].phase==='powder'?'粒状固体':'固体'} · 比重 {MATERIALS[material].density} <b>·</b> {MATERIALS[material].temperature}°C</span></div>
       {MATERIALS[material].description&&<p className="material-card">架空物質 · {MATERIALS[material].description}</p>}
@@ -212,7 +219,7 @@ export default function FluidLab() {
         <div className="section-label">接続 <span>JOINT</span></div><label className="text-field">親オブジェクト<select aria-label="親オブジェクト" value={node.parent??''} onChange={e=>{beforeEdit();if(!engine.reparent(node.id,e.target.value===''?null:Number(e.target.value)))inform('循環する接続は作れません');engine.rasterize();refresh();}}><option value="">背景</option>{engine.nodes.filter(n=>!engine.isDescendant(n.id,node.id)).map(n=><option value={n.id} key={n.id}>{n.name} #{n.id}</option>)}</select></label>
         <div className="segment"><button className={node.joint==='fixed'?'active':''} onClick={()=>{beforeEdit();engine.setJoint(node.id,'fixed');refresh();}}>固定関節</button><button className={node.joint==='free'?'active':''} onClick={()=>{beforeEdit();engine.setJoint(node.id,'free');refresh();}}>自由関節</button><button className={node.joint==='spring'?'active':''} onClick={()=>{beforeEdit();engine.setJoint(node.id,'spring');refresh();}}>ばね復帰</button></div><p className="small-note">{node.joint==='fixed'?'親の移動と回転に追従します。':node.joint==='spring'?'ガイドで曲がり、離れると基準角度に戻ります。':'ガイドで曲がり、その後は世界に対する角度を保ちます。'}</p>
         <p className="small-note">選択中の関節マーカーをドラッグすると、物体を動かさず支点を変更できます。</p>
-        {node.joint==='spring'&&<><label>曲がりの上限（度）<input aria-label="関節の角度上限" type="range" min="0" max="180" value={(node.jointLimit??Math.PI/2)*180/Math.PI} onPointerDown={beforeEdit} onChange={e=>{node.jointLimit=+e.target.value*Math.PI/180;refresh();}}/></label><label>ばねの強さ<input aria-label="ばねの強さ" type="range" min="0" max="80" value={node.stiffness??18} onPointerDown={beforeEdit} onChange={e=>{node.stiffness=+e.target.value;refresh();}}/></label><label>減衰<input aria-label="関節の減衰" type="range" min="0" max="30" value={node.damping??8} onPointerDown={beforeEdit} onChange={e=>{node.damping=+e.target.value;refresh();}}/></label></>}
+        {node.joint==='spring'&&<><label>曲がりの上限（度）<input aria-label="関節の角度上限" type="range" min="0" max="180" value={(node.jointLimit??Math.PI/2)*180/Math.PI} onPointerDown={beforeEdit} onChange={e=>{engine.editEpoch++;node.jointLimit=+e.target.value*Math.PI/180;refresh();}}/></label><label>ばねの強さ<input aria-label="ばねの強さ" type="range" min="0" max="80" value={node.stiffness??18} onPointerDown={beforeEdit} onChange={e=>{engine.editEpoch++;node.stiffness=+e.target.value;refresh();}}/></label><label>減衰<input aria-label="関節の減衰" type="range" min="0" max="30" value={node.damping??8} onPointerDown={beforeEdit} onChange={e=>{engine.editEpoch++;node.damping=+e.target.value;refresh();}}/></label></>}
 
         <div className="object-actions"><button onClick={()=>{beforeEdit();engine.detach(node.id);refresh();}}><GitBranch size={13}/>子を外す</button><button className="danger" onClick={remove}><Trash2 size={13}/>削除</button></div>
       </>:selected.size>1?<><div className="empty-properties"><Layers size={28}/><strong>{selected.size} 個のオブジェクトを選択</strong><p>選択されたまとまりをドラッグで移動できます。親子は二重に移動しません。</p></div><button className="full-button danger" onClick={remove}><Trash2 size={14}/>選択オブジェクトを削除</button></>:<>
@@ -222,7 +229,7 @@ export default function FluidLab() {
     <FloatingPanel title="オブジェクト" icon={Layers} initial={{x:Math.max(16,initialSize.width-(initialSize.width<600?171:270)),y:initialSize.width<600?129:Math.min(460,Math.max(320,initialSize.height-300))}} className="objects-panel">
       <div className="tree-root"><ChevronDown size={13}/><Grid2X2 size={13}/><span>背景</span><b>{engine.nodes.length}</b></div><div className="object-tree">{treeRows.length?treeRows.map(({node:n,depth})=><div className={`tree-row ${selected.has(n.id)?'selected':''}`} key={n.id} style={{paddingLeft:12+depth*13}}><button className="tree-select" onClick={e=>{setTool('select');setSelected(s=>{if(e.shiftKey){const next=new Set(s);if(next.has(n.id))next.delete(n.id);else next.add(n.id);return next;}return new Set([n.id]);});}}><NodeIcon node={n}/><span>{n.name}</span>{n.blocked&&<i className="blocked-dot" title="ガイドまたは盤面端に接触"/>}</button><button title={`${n.joint==='fixed'?'固定':n.joint==='spring'?'ばね復帰':'自由'}関節 · クリックで切替`} aria-label={`${n.name}の関節切替`} className={`joint-tag ${n.joint}`} onClick={()=>{beforeEdit();engine.setJoint(n.id,n.joint==='fixed'?'free':n.joint==='free'?'spring':'fixed');refresh();}}>{n.joint==='fixed'?'固定':n.joint==='spring'?'ばね':'自由'}</button></div>):<p className="tree-empty">モーターや可動壁を配置すると<br/>接続関係がここに表示されます。</p>}</div><div className="tree-footer"><span>Shift + クリックで複数選択</span><button title="盤面を全消去 · Undo可能" aria-label="盤面を全消去" onClick={()=>{engine.checkpoint();engine.clear();setSelected(new Set());setHints(false);refresh();inform('盤面を空にしました · Undo で戻せます');}}><Trash2 size={13}/></button></div>
     </FloatingPanel>
-    <footer className="statusbar"><span className={`status-indicator ${running?'playing':''}`}/><span>{running?'シミュレーション実行中':'編集モード · 停止中'}</span><span className="status-separator"/><span className="cursor-status">X <b>{cursor?.x??'—'}</b> Y <b>{cursor?.y??'—'}</b>{cursor&&<><i/><span>{engine.chemistry.components(engine.index(cursor.x,cursor.y)).map(p=>`${MATERIALS[p.material].name} ${(p.amount/engine.chemistry.mass(engine.index(cursor.x,cursor.y))*100).toFixed(0)}%`).join(' / ')||'空気'}</span><b>{cursor.temperature.toFixed(1)}°C</b><span>量 {engine.chemistry.mass(engine.index(cursor.x,cursor.y)).toFixed(2)}</span></>}</span><span className="status-right"><span>{stats.count.toLocaleString()} セル / 量 {engine.totalMass().toFixed(1)}</span>{engine.trapped.length>0&&<span title="逃げ場ができると盤面に戻ります">{engine.trapped.length} 粒子を一時保持</span>}<span>{(stats.tick/60).toFixed(1)} s</span><span className={stats.fps<30?'low-fps':''}>{stats.fps} FPS</span></span></footer>
+    <footer className="statusbar"><span className={`status-indicator ${running?'playing':''}`}/><span>{running?'シミュレーション実行中':'編集モード · 停止中'}</span><span className="status-separator"/><span className="cursor-status">X <b>{cursor?.x??'—'}</b> Y <b>{cursor?.y??'—'}</b>{cursor&&<><i/><span>{engine.chemistry.components(engine.index(cursor.x,cursor.y)).map(p=>`${MATERIALS[p.material].name} ${(p.amount/engine.chemistry.mass(engine.index(cursor.x,cursor.y))*100).toFixed(0)}%`).join(' / ')||'空気'}</span><b>{cursor.temperature.toFixed(1)}°C</b><span>量 {engine.chemistry.mass(engine.index(cursor.x,cursor.y)).toFixed(2)}</span></>}</span><span className="status-right"><span>{stats.count.toLocaleString()} セル / 量 {stats.mass.toFixed(1)}</span>{engine.trapped.length>0&&<span title="逃げ場ができると盤面に戻ります">{engine.trapped.length} 粒子を一時保持</span>}<span>{(stats.tick/60).toFixed(1)} s</span><span title="1.00×が実時間。高負荷では進行を遅くして操作応答を保ちます">進行 {stats.rate.toFixed(2)}×</span><span title="シミュレーション1ステップの計算時間">{stats.stepMs.toFixed(1)} ms</span><span className={stats.fps<30?'low-fps':''}>{stats.fps} FPS</span></span></footer>
     {notice&&<div className="toast" role="status"><Check size={16}/>{notice}</div>}
     {help&&<div className="modal-backdrop" onClick={()=>setHelp(false)}><section className="help-modal" aria-modal="true" role="dialog" aria-label="操作ガイド" onClick={e=>e.stopPropagation()}><button className="modal-close icon-button" aria-label="ガイドを閉じる" onClick={()=>setHelp(false)}><X size={19}/></button><FlaskConical size={30}/><h2>小さなセルから、実験を。</h2><p>物質を置いて、機械で動かして、その変化を観察する。</p><div className="reaction-card"><strong>{REACTIONS[0].name}</strong><p>{REACTIONS[0].ratio} · {REACTIONS[0].temperature}</p><p>結晶粉Aは水に溶け、冷却で析出。揮発液Bは65°Cから蒸発。重液Cは水と分離します。</p></div><ol><li><strong>物質を置く</strong><span>物質を選び、盤面をドラッグ。水・油・水銀の密度差を試してみましょう。</span></li><li><strong>機械を組む</strong><span>モーターと可動壁を置き、接続ツール（0）で子→親の順にクリック。関節は固定・自由・ばね復帰から選び、支点をドラッグで調整します。</span></li><li><strong>動かして観察</strong><span>Space で再生・停止。停止中も移動・設定ができます。加熱・冷却と温度表示で相変化を観察。</span></li></ol><div className="shortcut-list"><span><kbd>V</kbd>選択・移動</span><span><kbd>1–0</kbd>ツール切替</span><span><kbd>Space</kbd>再生 / 停止</span><span><kbd>[ ]</kbd>ブラシ半径</span><span><kbd>Ctrl / ⌘ Z</kbd>Undo</span><span><kbd>Delete</kbd>選択を削除</span></div><p className="small-note">ウィンドウはタイトルバーをドラッグして移動、− で折りたたみ。保存はこのブラウザ内のみ。科学計算用の CFD ではなく、挙動を楽しむセルモデルです。</p><button className="full-button accent" onClick={()=>setHelp(false)}>実験をはじめる <Play size={14}/></button></section></div>}
   </main>;

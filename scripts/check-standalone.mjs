@@ -62,16 +62,24 @@ try {
   await page.getByRole('button', { name: '見本', exact: true }).click();
   await page.getByLabel('観察モード').selectOption('component');
   await page.getByLabel('観察成分').selectOption('11');
-  await page.getByRole('button', { name: 'E回収用の選択膜', exact: true }).click();
+  await page.getByRole('button', { name: '結晶回収用の選択膜', exact: true }).click();
   await expect(page.getByLabel('通過成分')).toHaveValue('16');
   await page.getByRole('button', { name: '保存', exact: true }).click();
   const chemistry = await page.evaluate(() => JSON.parse(localStorage.getItem('cell-fluid-lab-v1')));
-  expect(chemistry.version).toBe(6);
+  expect(chemistry.version).toBe(7);
   expect(chemistry.chemistry.secondaryAmount.some(amount => amount > 0)).toBe(true);
   expect(errors).toEqual([]);
   expect(external).toEqual([]);
+  await page.getByLabel('実験見本').selectOption('cycles');
+  await page.getByRole('button', {name:'見本',exact:true}).click();
+  await page.getByRole('button', {name:'水素循環 · 電解槽',exact:true}).click();
+  await expect(page.getByLabel('処理方式')).toHaveValue('electrolysis');
+  await page.getByRole('button', {name:'再生 Space',exact:true}).click();
+  await expect.poll(async()=>{await page.getByRole('button',{name:'保存',exact:true}).click();return page.evaluate(()=>Math.min(...JSON.parse(localStorage.getItem('cell-fluid-lab-v1')).nodes.filter(n=>n.kind==='processor').map(n=>n.transported)));}).toBeGreaterThan(.05);
+  await page.getByRole('button', {name:'停止 Space',exact:true}).click();
+  expect(errors).toEqual([]);expect(external).toEqual([]);
   await page.screenshot({ path: resolve(root, 'test-results/standalone.png') });
-  console.log(`PASS: ${httpMode ? 'single HTML via intercepted HTTP (no server)' : 'file://'} + offline, embedded CPU Worker, animation, editing, piston settings, localStorage reload, Undo, mixed cells, experiment presets, membrane settings and concentration view; zero external dependencies and JavaScript errors.`);
+  console.log(`PASS: ${httpMode ? 'single HTML via intercepted HTTP (no server)' : 'file://'} + offline, embedded CPU Worker, animation, editing, piston settings, localStorage reload, Undo, mixed cells, experiment presets, membrane settings, concentration view and three closed material cycles; zero external dependencies and JavaScript errors.`);
   await context.close();
 } finally {
   await browser.close();

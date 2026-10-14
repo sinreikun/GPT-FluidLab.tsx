@@ -78,17 +78,17 @@ test('chemistry experiments expose composition and configurable separation devic
   const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));await page.goto('/');
   await page.getByRole('button',{name:'停止 Space',exact:true}).click();
   await page.getByLabel('実験見本').selectOption('reaction');await page.getByRole('button',{name:'見本',exact:true}).click();
-  await expect(page.getByText('A + D → 沈殿E → 選択膜で回収',{exact:true})).toBeVisible();
-  let s=await saveState(page);expect(s.version).toBe(6);expect(s.materialIds).toContain('precipitate-e');expect(s.chemistry.secondaryAmount.some((n:number)=>n>0)).toBe(true);
+  await expect(page.getByText('晶塩 + 活性剤 → 複合結晶 → 選択膜で回収',{exact:true})).toBeVisible();
+  let s=await saveState(page);expect(s.version).toBe(7);expect(s.materialIds).toContain('precipitate-e');expect(s.chemistry.secondaryAmount.some((n:number)=>n>0)).toBe(true);
   await page.getByLabel('観察モード').selectOption('component');await page.getByLabel('観察成分').selectOption('11');
-  await page.getByRole('button',{name:'E回収用の選択膜',exact:true}).click();
+  await page.getByRole('button',{name:'結晶回収用の選択膜',exact:true}).click();
   await page.getByLabel('通過成分').selectOption('1');await page.getByLabel('流量',{exact:true}).fill('3.5');await page.getByLabel('流量',{exact:true}).blur();
   s=await saveState(page);const membrane=s.nodes.find((n:any)=>n.kind==='membrane');expect(membrane.filterMaterial).toBe(1);expect(membrane.flowRate).toBe(3.5);
   await page.getByLabel('観察モード').selectOption('flow');await page.getByRole('button',{name:'再生 Space',exact:true}).click();
   await expect(page.locator('.status-right')).toContainText(/0\.[1-9] s|[1-9]\d*\.\d s/);await page.getByRole('button',{name:'停止 Space',exact:true}).click();
   s=await saveState(page);const product=s.cells.reduce((sum:number,m:number,i:number)=>sum+(m===16?s.chemistry.amount[i]:0)+(s.chemistry.secondary[i]===16?s.chemistry.secondaryAmount[i]:0),0);expect(product).toBeGreaterThan(0);
   await page.screenshot({path:'test-results/chemistry-reaction.png'});
-  await page.reload();await page.getByRole('button',{name:'停止 Space',exact:true}).click();await page.getByRole('button',{name:'E回収用の選択膜',exact:true}).click();await expect(page.getByLabel('通過成分')).toHaveValue('1');
+  await page.reload();await page.getByRole('button',{name:'停止 Space',exact:true}).click();await page.getByRole('button',{name:'結晶回収用の選択膜',exact:true}).click();await expect(page.getByLabel('通過成分')).toHaveValue('1');
   for(const example of ['dissolve','distill']){await page.getByLabel('実験見本').selectOption(example);await page.getByRole('button',{name:'見本',exact:true}).click();s=await saveState(page);expect(s.chemistry.amount).toHaveLength(89600);expect(s.nodes.length).toBeGreaterThan(0);}
   await page.screenshot({path:'test-results/chemistry-distill.png'});expect(errors).toEqual([]);
 });
@@ -113,4 +113,14 @@ test('CPU Worker keeps the UI responsive with dense cells and 240 devices, and c
   const frames=await page.evaluate(()=>new Promise<number>(resolve=>{let count=0;const start=performance.now();function frame(){count++;if(performance.now()-start>=500)resolve(count);else requestAnimationFrame(frame);}requestAnimationFrame(frame);}));expect(frames).toBeGreaterThan(4);
   expect(await page.evaluate(()=>(window as any).__cpuWorker.maxPending)).toBe(1);
   await page.keyboard.press('Space');await expect(page.getByText('編集モード · 停止中')).toBeVisible();await page.getByRole('button',{name:'盤面を全消去'}).click();expect((await saveState(page)).nodes).toHaveLength(0);await page.keyboard.press('Space');await expect.poll(()=>page.evaluate(()=>(window as any).__cpuWorker.received)).toBeGreaterThan(4);await page.keyboard.press('Space');expect((await saveState(page)).nodes).toHaveLength(0);expect(errors).toEqual([]);
+});
+
+test('three closed cycles expose processor controls, finite air and persist their counters',async({page})=>{
+  test.setTimeout(60000);const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));await page.goto('/');await page.getByRole('button',{name:'停止 Space',exact:true}).click();
+  await page.getByLabel('実験見本').selectOption('cycles');await page.getByRole('button',{name:'見本',exact:true}).click();
+  await expect(page.getByText('材料を再利用する三つの循環',{exact:true})).toBeVisible();await page.getByLabel('物質分類').selectOption('reaction');await expect(page.getByRole('button',{name:'晶塩',exact:true})).toBeVisible();await expect(page.getByRole('button',{name:'炭化水素油',exact:true})).toHaveCount(0);await page.getByLabel('物質分類').selectOption('all');await expect(page.getByRole('button',{name:'空気',exact:true})).toBeVisible();
+  await page.getByRole('button',{name:'水素循環 · 電解槽',exact:true}).click();await expect(page.getByLabel('処理方式')).toHaveValue('electrolysis');await page.locator('.properties-panel summary').filter({hasText:'ポートの個別配置'}).click();await expect(page.getByLabel('主入口 X',{exact:true})).toBeVisible();
+  let s=await saveState(page);const mass=(s:any)=>s.cells.reduce((sum:number,m:number,i:number)=>sum+(m?s.chemistry.amount[i]+s.chemistry.secondaryAmount[i]+s.chemistry.tertiaryAmount[i]:0),0);const initial=mass(s);
+  await page.getByRole('button',{name:'再生 Space',exact:true}).click();await expect.poll(async()=>{const state=await saveState(page);return Math.min(...state.nodes.filter((n:any)=>n.kind==='processor').map((n:any)=>n.transported));},{timeout:15000}).toBeGreaterThan(.1);await page.getByRole('button',{name:'停止 Space',exact:true}).click();s=await saveState(page);expect(mass(s)).toBeCloseTo(initial,4);expect(s.nodes.some((n:any)=>n.energyUsed>0)).toBe(true);expect(s.nodes.some((n:any)=>n.heatRemoved>0)).toBe(true);await page.screenshot({path:'test-results/cycles.png'});
+  await page.reload();await page.getByRole('button',{name:'停止 Space',exact:true}).click();await page.getByRole('button',{name:'水素循環 · 電解槽',exact:true}).click();await expect(page.getByLabel('処理方式')).toHaveValue('electrolysis');await page.getByLabel('電力・冷却能力',{exact:true}).fill('0');await page.getByLabel('電力・冷却能力',{exact:true}).blur();s=await saveState(page);expect(s.nodes.find((n:any)=>n.process==='electrolysis').power).toBe(0);expect(errors).toEqual([]);
 });

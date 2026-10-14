@@ -1,3 +1,5 @@
+import {processPorts,PROCESSES} from './processes';
+import {cycleLabels} from './cycle-demos';
 import { Engine, W, H, SIZE, MATERIALS, type Pose } from './engine';
 export interface RenderOptions { selected: Set<number>; temperature: boolean; view?: 'matter'|'temperature'|'component'|'flow'; component?:number; connections: boolean; grid: boolean; hints: boolean; preview?: {tool:string;x0:number;y0:number;x1:number;y1:number}; cursor?:{x:number;y:number;radius:number;tool:string} }
 export class Renderer {
@@ -27,6 +29,7 @@ export class Renderer {
         const t=engine.temperature[i];const hot=t>25;const blend=Math.min(.72,Math.abs(t-20)/(hot?650:65));
         const overlay=hot?[255,72,37]:[65,145,255];r=r*(1-blend)+overlay[0]*blend;g=g*(1-blend)+overlay[1]*blend;b=b*(1-blend)+overlay[2]*blend;
       }
+      if(engine.chemistry.flame[i]){const f=engine.chemistry.flame[i]/8;r=255;g=100+100*f;b=35;}
       data[i*4]=r;data[i*4+1]=g;data[i*4+2]=b;data[i*4+3]=255;
     }
     this.buffer.getContext('2d')!.putImageData(this.image,0,0);
@@ -68,7 +71,7 @@ export class Renderer {
       ctx.font='2.3px system-ui';ctx.fillStyle=color;ctx.fillText(n.enabled?`${target>=0?'+':''}${target}°C`:'OFF',p.x+4,p.y+1);ctx.restore();
     }
     for(const n of engine.nodes.filter(n=>['pump','valve','membrane'].includes(n.kind))){
-      const p=poses.get(n.id)!,ports=engine.devicePorts(n),color=!n.enabled?'#8c9aa7':n.deviceStatus==='移送中'?'#78e4b3':'#a1c6df';
+      const p=poses.get(n.id)!,ports=engine.devicePorts(n,poses),color=!n.enabled?'#8c9aa7':n.deviceStatus==='移送中'?'#78e4b3':'#a1c6df';
       ctx.save();ctx.strokeStyle=color;ctx.fillStyle='#172a35';ctx.lineWidth=.65;
       ctx.setLineDash(n.enabled?[]:[2,1]);ctx.beginPath();ctx.moveTo(ports.input.x,ports.input.y);ctx.lineTo(ports.output.x,ports.output.y);ctx.stroke();ctx.setLineDash([]);
       const a=Math.atan2(ports.output.y-ports.input.y,ports.output.x-ports.input.x);ctx.beginPath();ctx.moveTo(ports.output.x,ports.output.y);ctx.lineTo(ports.output.x-Math.cos(a-.5)*3,ports.output.y-Math.sin(a-.5)*3);ctx.moveTo(ports.output.x,ports.output.y);ctx.lineTo(ports.output.x-Math.cos(a+.5)*3,ports.output.y-Math.sin(a+.5)*3);ctx.stroke();
@@ -81,6 +84,23 @@ export class Renderer {
         if(n.deviceStatus==='移送中'){const f=(engine.tick%50)/50;ctx.beginPath();ctx.arc(ports.input.x+(ports.output.x-ports.input.x)*f,ports.input.y+(ports.output.y-ports.input.y)*f,1,0,Math.PI*2);ctx.fill();}
       }
       ctx.restore();
+    }
+    for(const n of engine.nodes.filter(n=>n.kind==='processor')){
+      const p=poses.get(n.id)!,ports=processPorts(engine,n,poses),mode=n.process??'electrolysis',active=n.deviceStatus==='処理中',color=!n.enabled?'#728391':active?(mode==='combustion'?'#ffac6d':'#80e1b6'):'#acd1e2';
+      ctx.save();ctx.lineWidth=.45;ctx.strokeStyle=color;ctx.fillStyle=color;ctx.setLineDash(active?[]:[1.5,1]);
+      const auxInput=['combustion','crystallization','extraction'].includes(mode),hasAux=mode!=='condensation';
+      const arrow=(from:{x:number;y:number},to:{x:number;y:number},shade:string)=>{ctx.strokeStyle=shade;ctx.beginPath();ctx.moveTo(from.x,from.y);ctx.lineTo(to.x,to.y);ctx.stroke();const a=Math.atan2(to.y-from.y,to.x-from.x);ctx.beginPath();ctx.moveTo(to.x,to.y);ctx.lineTo(to.x-Math.cos(a-.5)*2,to.y-Math.sin(a-.5)*2);ctx.moveTo(to.x,to.y);ctx.lineTo(to.x-Math.cos(a+.5)*2,to.y-Math.sin(a+.5)*2);ctx.stroke();};
+      arrow(ports.input,p,'#81b5cb');arrow(p,ports.output,color);if(hasAux)arrow(auxInput?ports.aux:p,auxInput?p:ports.aux,'#d8b585');ctx.setLineDash([]);
+      for(const [key,point] of Object.entries(ports)){if(key==='aux'&&!hasAux)continue;ctx.strokeStyle=key==='aux'?'#d8b585':color;ctx.beginPath();ctx.arc(point.x,point.y,1.3,0,Math.PI*2);ctx.stroke();}
+      ctx.fillStyle='#142e35';ctx.strokeStyle=color;ctx.fillRect(p.x-3.5,p.y-3,7,6);ctx.strokeRect(p.x-3.5,p.y-3,7,6);ctx.fillStyle=color;ctx.font='2.1px system-ui';ctx.fillText(PROCESSES[mode].symbol,p.x-2,p.y+.7);ctx.fillText(PROCESSES[mode].name,p.x-6,p.y-5);
+      ctx.font='1.9px system-ui';ctx.fillText(`${(n.transported??0).toFixed(2)} 量`,p.x-4,p.y+6);
+      if(opts.selected.has(n.id)){ctx.font='2px system-ui';ctx.fillText(n.deviceStatus??'待機中',p.x+5,p.y+1);}
+      ctx.restore();
+    }
+    const cycleKind=engine.experimentTitle==='材料を再利用する三つの循環'?'cycles':engine.experimentTitle==='水素循環'?'hydrogen-cycle':engine.experimentTitle==='結晶循環'?'crystal-cycle':engine.experimentTitle==='抽出循環'?'extraction-cycle':'';
+    if(cycleKind)for(const group of cycleLabels(cycleKind)){
+      ctx.fillStyle='#79d1be';ctx.font='2.6px system-ui';ctx.fillText(group.name,79,group.points[0].point.y-30);
+      for(const {point,label} of group.points){const index=engine.index(point.x,point.y),m=engine.cells[index],color=MATERIALS[m].color;ctx.fillStyle=`rgb(${color.join(',')})`;ctx.strokeStyle='#669caa';ctx.lineWidth=.5;ctx.beginPath();ctx.arc(point.x,point.y,2.8,0,Math.PI*2);ctx.fill();ctx.stroke();ctx.fillStyle='#c2d6da';ctx.font='2.2px system-ui';ctx.fillText(label,point.x-5,point.y+6);ctx.fillStyle='#789ba8';ctx.font='1.9px system-ui';ctx.fillText(`${engine.chemistry.mass(index).toFixed(3)} 量`,point.x-5,point.y+10);}
     }
     if(opts.hints&&!engine.experimentTitle) {
       const label=(x:number,y:number,num:string,title:string,sub:string)=>{ctx.font='2.6px system-ui';ctx.fillStyle='#6fe4c0';ctx.fillText(num,x,y);ctx.fillStyle='#aabecb';ctx.fillText(title,x+7,y);ctx.font='2px system-ui';ctx.fillStyle='#567282';ctx.fillText(sub,x+7,y+4);};
